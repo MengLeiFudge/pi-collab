@@ -79,7 +79,10 @@ export function updateAssignment(store, task, request, member, author) {
         const workspace = realpathSync(text(input.workspace, "workspace", 4096));
         const location = resolveProject(store, { ...request, project_id: undefined, project_root: workspace });
         const project = "id" in location ? location.id : store.one("SELECT id FROM projects WHERE locator=?", location.locator)?.id;
-        requireValue(project === task.project_id, "PROJECT", "写入范围工作区不属于当前项目");
+        if (project !== task.project_id) {
+            const registered = store.one("SELECT root FROM projects WHERE id=?", task.project_id);
+            requireValue(false, "PROJECT", "workspace 未定位到房间项目；请使用返回的 project_root 作为 workspace，并将 scope 改为相对该目录的路径。若项目 Git 身份已变化，请重新选择项目房间。", { workspace, project_root: registered.root });
+        }
         const scopes = scopePaths(workspace, input.scope);
         checkScopes(store, scopes);
         const id = newId(), revision = newId();

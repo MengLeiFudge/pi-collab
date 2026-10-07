@@ -27,9 +27,11 @@ export function updateProgress(store: Store, task: Task, request: Request, autho
   requireValue(uuid(request.contract_revision, "contract_revision") === task.current_revision, "VERSION_CONFLICT", "推进状态依据的合同已变化", { current_revision: task.current_revision });
   const supplied = object(request.progress, "progress");
   requireValue(Object.keys(supplied).every(key => ["stage", "owner", "next_action", "blocked", "resume", "status"].includes(key)), "INPUT", "progress 包含未知字段");
+  // blocked 统一保存为文本，布尔值和省略输入不改变状态记录及导出的结构。
+  const blocked = supplied.blocked === true ? "有阻塞（未说明原因）" : supplied.blocked === false || supplied.blocked === undefined ? "" : supplied.blocked;
   const state = {
     stage: text(supplied.stage, "progress.stage", 256), owner: text(supplied.owner, "progress.owner", 512),
-    next_action: text(supplied.next_action, "progress.next_action", 1024, true), blocked: text(supplied.blocked, "progress.blocked", 1024, true),
+    next_action: text(supplied.next_action, "progress.next_action", 1024, true), blocked: text(blocked, "progress.blocked", 1024, true),
     resume: text(supplied.resume, "progress.resume", 1024, true), status: choice(supplied.status, "progress.status", ["in-progress", "completed", "blocked", "paused"]),
   };
   const id = newId();

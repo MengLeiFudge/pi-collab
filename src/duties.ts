@@ -33,10 +33,15 @@ export function updateDuty(store: Store, task: Task, request: Request, member: M
 export function invitation(store: Store, task: Task, request: Request): Record<string, unknown> {
   const title = store.one<{ title: string }>("SELECT title FROM revisions WHERE id=?", task.current_revision)!.title;
   const duty = request.invite_duty === undefined ? undefined : text(request.invite_duty, "invite_duty", 512);
-  const scope = request.invite_scope === undefined ? undefined : text(request.invite_scope, "invite_scope", 2048);
+  let scope = request.invite_scope;
+  if (Array.isArray(scope)) {
+    requireValue(scope.length > 0 && scope.length <= 64, "INPUT", "invite_scope 数组需要 1–64 个非空字符串");
+    scope = scope.map(value => text(value, "invite_scope[]", 2048)).join("、");
+  }
+  const scopeText = scope === undefined ? undefined : text(scope, "invite_scope", 2048);
   const lines = [`请使用 collab open 加入主题“${title}”，task_id 为 ${task.id}。`,
     ...(duty ? [`我指定你的分工为：${duty}。请将此用户指示登记为成员职责；若原职责不同，明确说明变更。`] : ["先继承并查看当前职责；没有职责时先阅读，执行前再向我明确分工。"]),
-    ...(scope ? [`我指定本次工作范围为：${scope}。写入前按实际文件登记范围。`] : []),
+    ...(scopeText ? [`我指定本次工作范围为：${scopeText}。写入前按实际文件登记范围。`] : []),
     "请读取当前合同、推进状态及与你职责有关的未解决意见；最近十条只是导航。按已有授权继续，无需确认收到或轮询等待。"];
   return { invitation: lines.join("\n"), task_id: task.id, title, contract_revision: task.current_revision };
 }
