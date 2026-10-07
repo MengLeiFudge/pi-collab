@@ -1,0 +1,38 @@
+{
+  "name": "pi-collab",
+  "version": "0.1.0",
+  "description": "Local collaboration rooms for independent Pi sessions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MengLeiFudge/pi-collab.git"
+  },
+  "type": "module",
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "keywords": ["pi-package", "collaboration"],
+  "files": ["dist/", "skills/", "docs/", "README.md"],
+  "pi": {
+    "extensions": ["./dist/index.js"],
+    "skills": ["./skills/collab-workflow"]
+  },
+  "bin": { "pi-collab": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/pi-tui": "1.0.4",
+    "typebox": "1.3.27",
+    "@types/node": "22.19.0",
+    "typescript": "5.9.3"
+  }
+}
