@@ -130,13 +130,12 @@ export function piModel(ctx: ExtensionContext): ModelIdentity | undefined {
   return ctx.model?.name ? { name: ctx.model.name, provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
 
-/** 状态栏保留完整名称；消息计数随现有查询采样，异常状态替代未读段。 */
+/** 状态栏保留完整名称；新消息数沿用未读水位线，异常状态替代计数段。 */
 export function roomStatus(ctx: ExtensionContext, selected: Selection, note = "", stats?: MessageStats): void {
   stats ??= branchState(ctx).stats.get(selected.task_id);
-  const parts = ["collab", stats?.title ?? selected.title ?? "房间", ctx.model?.name ?? "模型未就绪"];
-  if (stats) parts.push(`消息 ${stats.total}`);
+  const parts = ["collab", stats?.title ?? selected.title ?? "Room", ctx.model?.name ?? "Model unavailable"];
   if (note) parts.push(note);
-  else if (stats) parts.push(`未读 ${stats.unread}`);
+  else if (stats) parts.push(`${stats.unread} new message${stats.unread === 1 ? "" : "s"}`);
   if (ctx.hasUI) ctx.ui.setStatus("collab", parts.join(" · "));
 }
 
@@ -185,9 +184,9 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
     const message = error instanceof Error ? error.message : String(error);
     if (ctx.hasUI) {
       const selected = branchState(ctx, pendingTool).selected;
-      if (selected) roomStatus(ctx, selected, "接收暂停");
-      else ctx.ui.setStatus("collab", "collab · 未加入");
-      if (message !== lastError) ctx.ui.notify(`collab：${message}`, "warning");
+      if (selected) roomStatus(ctx, selected, "Delivery paused");
+      else ctx.ui.setStatus("collab", "collab · Not joined");
+      if (message !== lastError) ctx.ui.notify(`collab: ${message}`, "warning");
     }
     lastError = message;
   };
@@ -205,10 +204,10 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
     if (!selected) { if (ctx.hasUI) ctx.ui.setStatus("collab", undefined); return; }
     if (!member || state.superseded.has(selected.task_id) || ctx.model?.name !== member.model.name) {
       release();
-      roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "已被接替（只读）" : "未加入", state.stats.get(selected.task_id));
+      roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "Superseded (read-only)" : "Not joined", state.stats.get(selected.task_id));
       return;
     }
-    roomStatus(ctx, selected, paused || state.blocked.has(selected.task_id) ? "接收暂停" : "", state.stats.get(selected.task_id));
+    roomStatus(ctx, selected, paused || state.blocked.has(selected.task_id) ? "Delivery paused" : "", state.stats.get(selected.task_id));
     if (!watcher) {
       if (watchFailures >= 3) { report(ctx, "目录监听连续失败；使用 /collab info 或 reload 后重新绑定"); return; }
       if (!existsSync(dataDirectory())) throw new Error("任务数据库目录不存在，不能接收协作内容");
@@ -252,7 +251,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       const error = result.error as { code: string; message: string };
       if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
         pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true } satisfies Details);
-        release(); roomStatus(ctx, selected, "已被接替（只读）");
+        release(); roomStatus(ctx, selected, "Superseded (read-only)");
         return;
       }
       if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
@@ -346,7 +345,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
         const error = result.error as { code: string; message: string };
         if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
           pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true } satisfies Details);
-          release(); roomStatus(ctx, selected, "已被接替（只读）");
+          release(); roomStatus(ctx, selected, "Superseded (read-only)");
         } else {
           if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
             pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, blocked: true } satisfies Details);

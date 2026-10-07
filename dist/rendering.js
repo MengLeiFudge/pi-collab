@@ -1,34 +1,40 @@
 import { keyHint } from "@earendil-works/pi-coding-agent";
-import { MouseRegion, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, MouseRegion, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { excerpt } from "./protocol.js";
 /** 摘要压成一行；完整正文仅由展开态显示，不改模型输入。 */
 function brief(value) {
     return excerpt(value.replace(/\s+/g, " ").trim(), 100);
 }
+/** 消息、系统更新与省略项分别显示，供实时批次和已保存摘要共用。 */
+function receivedCounts(actor, messages, updates, omitted) {
+    return `${actor} received ${messages} message${messages === 1 ? "" : "s"}${updates ? ` and ${updates} collaboration update${updates === 1 ? "" : "s"}` : ""}${omitted ? ` (${omitted} more available)` : ""}`;
+}
 /** 系统事件与发帖分别计数，避免把范围登记称为聊天消息。 */
 export function receivedSummary(batch, actor) {
     const messages = batch.messages.filter(item => item.kind === "posted").length;
-    const updates = batch.messages.length - messages;
-    return `${actor} 收到了 ${messages} 条消息${updates ? `、${updates} 条协作更新` : ""}${batch.omitted_events ? `（另有 ${batch.omitted_events} 项可查）` : ""}`;
+    return receivedCounts(actor, messages, batch.messages.length - messages, batch.omitted_events ?? 0);
 }
 /** 从结构化结果生成动作摘要；旧会话或错误结果可退回正文首行。 */
 function resultSummary(details, body, input) {
-    if (details?.display_summary)
-        return details.display_summary;
+    if (details?.display_summary) {
+        // 已保存批次只有生成后的摘要；仅识别插件的固定格式，不翻译用户正文或改写历史。
+        const saved = /^(.*) 收到了 (\d+) 条消息(?:、(\d+) 条协作更新)?(?:（另有 (\d+) 项可查）)?$/u.exec(details.display_summary);
+        return saved ? receivedCounts(saved[1], Number(saved[2]), Number(saved[3] ?? 0), Number(saved[4] ?? 0)) : details.display_summary;
+    }
     const result = details?.result;
-    const actor = details?.model_name ?? details?.membership?.model.name ?? "当前会话";
+    const actor = details?.model_name ?? details?.membership?.model.name ?? "Current session";
     if (result?.ok === false)
-        return `${actor} 协作操作失败：${brief(String(result.error?.message ?? body))}`;
+        return `${actor} collaboration failed: ${brief(String(result.error?.message ?? body))}`;
     if (result?.view === "content" && Array.isArray(result.messages))
         return receivedSummary(result, actor);
     if (details?.command === "post")
-        return `${actor} 发送了一条消息：${brief(String(input?.summary ?? input?.body ?? ""))}`;
+        return `${actor} sent a message: ${brief(String(input?.summary ?? input?.body ?? ""))}`;
     if (details?.command === "open" && details.selection)
-        return `${actor} ${details.joined ? "加入" : "查看"}了房间：${details.selection.title ?? "协作房间"}`;
-    const actions = { update: "更新了协作记录", resolve: "处理了一条意见", snapshot: "保存了快照", export: "导出了协作记录", show: "查看了协作内容", read: "读取了协作内容" };
+        return `${actor} ${details.joined ? "joined" : "viewed"} room: ${details.selection.title ?? "Collaboration room"}`;
+    const actions = { update: "updated collaboration records", resolve: "resolved an issue", snapshot: "saved a snapshot", export: "exported collaboration records", show: "viewed collaboration content", read: "read collaboration content" };
     if (details?.command && actions[details.command])
         return `${actor} ${actions[details.command]}`;
-    return brief(body.split("\n", 1)[0] || "协作消息");
+    return brief(body.split("\n", 1)[0] || "Collaboration message");
 }
 /** 折叠态只显示摘要与真实渲染行数；Text 负责宽字符、换行和宽度缓存。 */
 class FoldedText {
@@ -48,7 +54,7 @@ class FoldedText {
             return lines;
         return [
             truncateToWidth(this.theme.fg("accent", this.summary), width),
-            truncateToWidth(this.theme.fg("muted", `还有 ${lines.length} 行，`) + keyHint("app.tools.expand", "展开"), width),
+            truncateToWidth(this.theme.fg("muted", `${lines.length} more line${lines.length === 1 ? "" : "s"}, `) + keyHint("app.tools.expand", "expand"), width),
         ];
     }
     invalidate() { this.text.invalidate(); }
@@ -57,14 +63,14 @@ class FoldedText {
 export const toolRenderers = {
     renderCall(args, theme, context) {
         const command = args?.command;
-        const title = `Collab · ${typeof command === "string" ? command : "操作"}`;
+        const title = `Collab · ${typeof command === "string" ? command : "operation"}`;
         if (context.expanded)
             return new Text(`${title}\n${JSON.stringify(args, null, 2)}`, 0, 0);
         return { render: width => [truncateToWidth(theme.fg("toolTitle", title), width)], invalidate() { } };
     },
     renderResult(result, options, theme, context) {
         const body = result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
-        const summary = options.isPartial ? "协作操作进行中" : resultSummary(result.details, body, context.args?.input);
+        const summary = options.isPartial ? "Collaboration in progress" : resultSummary(result.details, body, context.args?.input);
         return new FoldedText(summary, body, () => options.expanded, theme);
     },
 };
@@ -79,12 +85,16 @@ export function registerRendering(pi) {
                 states.set(message, state);
             }
             const body = typeof message.content === "string" ? message.content : message.content.filter(item => item.type === "text").map(item => item.text).join("\n");
-            const text = new FoldedText(resultSummary(message.details, body), body, () => state.expanded, theme);
-            return new MouseRegion(text, event => {
+            const summary = type === "collab.error" ? "Collab delivery paused" : resultSummary(message.details, body);
+            const text = new FoldedText(summary, body, () => state.expanded, theme);
+            // 自定义消息绕过 Pi 默认容器，需要自行提供背景与内边距；工具结果仍由宿主包裹。
+            const box = new Box(1, 1, line => theme.bg("customMessageBg", line));
+            box.addChild(text);
+            return new MouseRegion(box, event => {
                 if (event.type !== "click" || event.button !== "left")
                     return undefined;
                 state.expanded = !state.expanded;
-                text.invalidate();
+                box.invalidate();
                 return { handled: true, render: true };
             });
         });

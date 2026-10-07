@@ -1,0 +1,28 @@
+# 推送 v* 标签时发布到 npm。使用 npm Trusted Publishing（OIDC），仓库不保存 NPM_TOKEN；
+# 需在 npmjs.com 包设置中把本仓库与 publish.yml 登记为 Trusted Publisher。
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC 换取 npm 发布凭据并生成 provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing 要求 npm >= 11.5.1。
+      - run: npm install -g npm@11.6.2
+      - name: Tag must match package.json version
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: npm run check
+      - run: npm publish
