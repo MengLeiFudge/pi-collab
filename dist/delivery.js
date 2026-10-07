@@ -29,6 +29,11 @@ export function inboxFilter(store, task, request, after, upper) {
     }
     return { sql, values };
 }
+/** 统计房间消息而非系统事件；历史翻阅和紧急跳读不改变水位线计数。 */
+export function messageStats(store, task, after) {
+    const row = store.one("SELECT count(*) AS total,coalesce(sum(event_seq>?),0) AS unread,(SELECT title FROM revisions WHERE id=?) AS title FROM messages WHERE task_id=?", after, task.current_revision, task.id);
+    return { ...row, after, upper: task.event_seq };
+}
 /** 按固定快照合并正文；批次确认上界，预算外内容通过明确入口按需展开。 */
 export function readInbox(store, task, request, window) {
     const after = request.after === undefined ? window.upper : anchor(request.after);
@@ -65,9 +70,14 @@ export function readInbox(store, task, request, window) {
         urgent_only: urgentOnly, wait_ms: wait,
         history: { after, window, view: "index" },
     };
+    result.display_stats = messageStats(store, task, result.next.after.seq);
     const budget = integer(request.max_bytes, "max_bytes", 12 * 1024, 64 * 1024);
     requireValue(budget >= 4096, "INPUT", "max_bytes 至少为 4096");
-    const bytes = () => Buffer.byteLength(JSON.stringify({ ok: true, ...result }));
+    // 显示元数据不占模型正文预算，保持已有批次的正文截断边界。
+    const bytes = () => {
+        const { display_stats: _stats, ...content } = result;
+        return Buffer.byteLength(JSON.stringify({ ok: true, ...content }));
+    };
     // 先为所有可列事件保留来源和入口，再把剩余字节分配给正文，避免首条吃掉整批。
     for (const event of events) {
         let summary = event.summary;

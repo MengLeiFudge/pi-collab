@@ -1,6 +1,6 @@
 {
-  "name": "pi-collab",
-  "version": "0.2.0",
+  "name": "@mengleifudge/pi-collab",
+  "version": "0.3.0",
   "description": "Local collaboration rooms for independent Pi sessions",
   "license": "MIT",
   "repository": {
@@ -11,6 +11,7 @@
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "keywords": ["pi-package", "collaboration"],
   "files": ["dist/", "skills/", "docs/", "README.md"],
+  "publishConfig": { "access": "public" },
   "pi": {
     "extensions": ["./dist/index.js"],
     "skills": ["./skills/collab-workflow"]

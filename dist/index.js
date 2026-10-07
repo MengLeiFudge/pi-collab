@@ -1,3 +1,4 @@
+import { registerRendering, toolRenderers } from "./rendering.js";
 import { registerBridge } from "./bridge-http.js";
 import { ProcessRunner, nodeExecutable } from "./processes.js";
 import { agentDirectory } from "./signals.js";
@@ -30,6 +31,7 @@ export default function collabExtension(pi) {
             throw new Error(`collab CLI：${output.stderr || (error instanceof Error ? error.message : error)}`);
         }
     };
+    registerRendering(pi);
     registerBridge(pi, invoke);
     const receiver = registerReceiver(pi, invoke);
     let epoch = 0;
@@ -69,6 +71,7 @@ export default function collabExtension(pi) {
             await receiver.refresh(ctx);
     });
     pi.registerTool({
+        ...toolRenderers,
         name: "collab",
         label: "Collab",
         description: "本机 Pi 协作：open/read/show/post/update/resolve/export/snapshot。参数放 input；操作前按需读 collab-workflow skill。",

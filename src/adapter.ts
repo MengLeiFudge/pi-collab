@@ -3,7 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hasQuery } from "./chat.ts";
 import { branchState, piModel } from "./receiver.ts";
 import type { Details, Invoke, MemberBinding, Selection, ViewedMessage } from "./receiver.ts";
-import type { Cursor } from "./protocol.ts";
+import type { Cursor, MessageStats } from "./protocol.ts";
 import { failure, requireValue } from "./protocol.ts";
 import { resultText } from "./presentation.ts";
 
@@ -41,7 +41,7 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
     if (!params.userAction && ["leave", "preferences", "release-scopes"].includes(String(input.action))) return { content: [{ type: "text", text: "成员设置和离开由用户通过 /collab 菜单控制。" }], details: { collab_version: 2, session_id: sessionId }, isError: true };
     const discovery = params.command === "open" && input.action === "rooms";
     const invite = params.command === "open" && input.action === "invite";
-    const details: Details = { collab_version: 2, session_id: sessionId };
+    const details: Details = { collab_version: 2, session_id: sessionId, model_name: model?.name, command: params.command };
     const userRelease = params.command === "open" && input.action === "release-scopes" && params.userAction === true;
     if (userRelease) input.user_action = true;
     const writing = userRelease || ["post", "update", "resolve", "snapshot"].includes(params.command);
@@ -90,7 +90,7 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
       if (!params.reset && !joining && selected) {
         input.database_id ??= selected.database_id;
         input.generation ??= selected.generation;
-        if (writing || params.command === "read" && !freeQuery && input.view !== "index") input.after ??= checkpoint?.after;
+        if (writing || params.command === "open" || params.command === "read" && !freeQuery && input.view !== "index") input.after ??= checkpoint?.after;
       }
       if (params.command === "read") {
         input.view ??= freeQuery ? "messages" : "content";
@@ -111,6 +111,8 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
       requireValue(scope === epoch() && sessionId === ctx.sessionManager.getSessionId() && model?.name === piModel(ctx)?.name,
         "CONTEXT_CHANGED", "调用期间会话、分支或选中模型已变化；写入可能已经完成，请用原 request_id 核对");
       const nextSelection = selection(result);
+      details.stats = result.display_stats as MessageStats | undefined;
+      delete result.display_stats;
       details.result = result;
       if (result.left === true) { details.clear_selection = true; details.superseded = true; }
       if (nextSelection && result.left !== true) details.selection = { ...nextSelection, title: nextSelection.title ?? selected?.title };

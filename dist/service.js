@@ -12,7 +12,7 @@ import { snapshot, snapshotView } from "./snapshot.js";
 import { beginWrite, finishWrite } from "./writes.js";
 import { notificationFields } from "./notifications.js";
 import { maintain, routineBackup } from "./maintenance.js";
-import { inboxFilter, readInbox } from "./delivery.js";
+import { inboxFilter, messageStats, readInbox } from "./delivery.js";
 import { notifyCommitted } from "./signals.js";
 import { atomicFile, resolveProject } from "./routing.js";
 import { anchor, bodyPage as page, choice, commands, documentDiff, excerpt, flag, integer, newId, object, optionalText, requireValue, text, uuid } from "./protocol.js";
@@ -68,7 +68,8 @@ function openedTask(store, task, request) {
         room.members_after = members.at(-1).id;
     }
     requireValue(Buffer.byteLength(JSON.stringify({ ok: true, ...result })) <= 12 * 1024, "OUTPUT_BUDGET", "房间概况超过预算，请按对象展开合同或消息");
-    return result;
+    const displayAfter = joined ? cursor.after : store.checkAnchor(task, request.after ?? cursor.after);
+    return { ...result, display_stats: messageStats(store, task, displayAfter.seq) };
 }
 /** 固定上界及文档版本按数据库快照验证，客户端不能任意拼接分页视图。 */
 function readWindow(store, task, request, after) {

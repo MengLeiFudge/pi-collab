@@ -1,8 +1,9 @@
 import { existsSync, watch } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import type { ExtensionAPI, ExtensionContext, CustomMessageEntryDraft } from "@earendil-works/pi-coding-agent";
-import { canonical, excerpt, inboxText, newId } from "./protocol.ts";
-import type { Cursor, InboxResult } from "./protocol.ts";
+import { canonical, inboxText, newId } from "./protocol.ts";
+import type { Cursor, InboxResult, MessageStats } from "./protocol.ts";
+import { receivedSummary } from "./rendering.ts";
 import { changeSignal, dataDirectory } from "./signals.ts";
 import type { Membership, ModelIdentity } from "./members.ts";
 
@@ -34,6 +35,10 @@ export interface Details {
   superseded?: boolean;
   viewed?: ViewedMessage[];
   result?: Record<string, unknown>;
+  stats?: MessageStats;
+  model_name?: string;
+  command?: string;
+  display_summary?: string;
 }
 
 /** 一个任务只有一个收件位置；重置标识隔离先前排队的消息。 */
@@ -46,6 +51,7 @@ export interface BranchState {
   superseded: Set<string>;
   viewed: Map<string, Map<string, number>>;
   deliveredBatches: Set<string>;
+  stats: Map<string, MessageStats>;
 }
 
 /** 工具结果钩子发生在持久化之前，只在该短窗口补入结果。 */
@@ -56,7 +62,7 @@ export type Invoke = (command: string, input: Record<string, unknown>, ctx: Exte
 
 /** 原生分支条目是交付证据；新进度不会被迟到的旧批次回退。 */
 export function branchState(ctx: ExtensionContext, pending?: PendingTool): BranchState {
-  const state: BranchState = { checkpoints: new Map(), resets: new Map(), blocked: new Set(), memberships: new Map(), superseded: new Set(), viewed: new Map(), deliveredBatches: new Set() };
+  const state: BranchState = { checkpoints: new Map(), resets: new Map(), blocked: new Set(), memberships: new Map(), superseded: new Set(), viewed: new Map(), deliveredBatches: new Set(), stats: new Map() };
   const apply = (details: Details | undefined, toolId?: string, automatic = false): void => {
     if (!details || details.collab_version !== 2 || details.session_id !== ctx.sessionManager.getSessionId()) return;
     const taskId = details.selection?.task_id ?? details.task_id;
@@ -71,7 +77,7 @@ export function branchState(ctx: ExtensionContext, pending?: PendingTool): Branc
           // 新 lease 隔离进度，但已交付讨论仍是本分支历史；只有世代变化重置上下文。
           const checkpoint = state.checkpoints.get(taskId);
           if (checkpoint && details.checkpoint?.generation !== checkpoint.generation) state.resets.set(taskId, details.membership.lease);
-          state.checkpoints.delete(taskId); state.viewed.delete(taskId);
+          state.checkpoints.delete(taskId); state.viewed.delete(taskId); state.stats.delete(taskId);
         }
         state.blocked.delete(taskId); state.superseded.delete(taskId);
       }
@@ -83,7 +89,7 @@ export function branchState(ctx: ExtensionContext, pending?: PendingTool): Branc
       state.resets.set(taskId, toolId);
       state.checkpoints.delete(taskId);
       state.blocked.delete(taskId);
-      state.viewed.delete(taskId);
+      state.viewed.delete(taskId); state.stats.delete(taskId);
     }
     if (taskId && details.blocked) state.blocked.add(taskId);
     if (details.checkpoint) {
@@ -96,6 +102,7 @@ export function branchState(ctx: ExtensionContext, pending?: PendingTool): Branc
       for (const message of details.viewed) viewed.set(message.id, message.event_seq);
       state.viewed.set(taskId, viewed);
     }
+    if (taskId && details.stats) state.stats.set(taskId, details.stats);
   };
   let pendingStored = false;
   for (const entry of ctx.sessionManager.getBranch()) {
@@ -123,9 +130,14 @@ export function piModel(ctx: ExtensionContext): ModelIdentity | undefined {
   return ctx.model?.name ? { name: ctx.model.name, provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
 
-/** 底部以主题和模型为入口；稳定房间身份由菜单的复制加入指令提供。 */
-export function roomStatus(ctx: ExtensionContext, selected: Selection, note: string): void {
-  if (ctx.hasUI) ctx.ui.setStatus("collab", `collab ${excerpt(selected.title ?? "房间", 18)} · ${excerpt(ctx.model?.name ?? "模型未就绪", 24)} · ${note}`);
+/** 状态栏保留完整名称；消息计数随现有查询采样，异常状态替代未读段。 */
+export function roomStatus(ctx: ExtensionContext, selected: Selection, note = "", stats?: MessageStats): void {
+  stats ??= branchState(ctx).stats.get(selected.task_id);
+  const parts = ["collab", stats?.title ?? selected.title ?? "房间", ctx.model?.name ?? "模型未就绪"];
+  if (stats) parts.push(`消息 ${stats.total}`);
+  if (note) parts.push(note);
+  else if (stats) parts.push(`未读 ${stats.unread}`);
+  if (ctx.hasUI) ctx.ui.setStatus("collab", parts.join(" · "));
 }
 
 /** 命令和模型选择在记录新绑定后刷新同一个收件器。 */
@@ -172,7 +184,9 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
   const report = (ctx: ExtensionContext, error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
     if (ctx.hasUI) {
-      ctx.ui.setStatus("collab", "collab 接收暂停");
+      const selected = branchState(ctx, pendingTool).selected;
+      if (selected) roomStatus(ctx, selected, "接收暂停");
+      else ctx.ui.setStatus("collab", "collab · 未加入");
       if (message !== lastError) ctx.ui.notify(`collab：${message}`, "warning");
     }
     lastError = message;
@@ -191,10 +205,10 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
     if (!selected) { if (ctx.hasUI) ctx.ui.setStatus("collab", undefined); return; }
     if (!member || state.superseded.has(selected.task_id) || ctx.model?.name !== member.model.name) {
       release();
-      roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "已被接替 · 只读" : "待加入");
+      roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "已被接替（只读）" : "未加入", state.stats.get(selected.task_id));
       return;
     }
-    roomStatus(ctx, selected, "空闲接收");
+    roomStatus(ctx, selected, paused || state.blocked.has(selected.task_id) ? "接收暂停" : "", state.stats.get(selected.task_id));
     if (!watcher) {
       if (watchFailures >= 3) { report(ctx, "目录监听连续失败；使用 /collab info 或 reload 后重新绑定"); return; }
       if (!existsSync(dataDirectory())) throw new Error("任务数据库目录不存在，不能接收协作内容");
@@ -218,7 +232,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       if (recorded(ctx, pendingMessage)) { pendingMessage = undefined; deliveryFailures = 0; }
       else return;
     }
-    if (state.blocked.has(selected.task_id)) { roomStatus(ctx, selected, "需核对恢复状态"); return; }
+    if (state.blocked.has(selected.task_id)) return;
     const scope = epoch;
     const checkpoint = state.checkpoints.get(selected.task_id);
     const sessionId = ctx.sessionManager.getSessionId();
@@ -238,7 +252,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       const error = result.error as { code: string; message: string };
       if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
         pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true } satisfies Details);
-        release(); roomStatus(ctx, selected, "已被接替 · 只读");
+        release(); roomStatus(ctx, selected, "已被接替（只读）");
         return;
       }
       if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
@@ -249,13 +263,17 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       throw new Error(`${error.code}: ${error.message}`);
     }
     failures = 0; lastError = undefined;
-    roomStatus(ctx, selected, "空闲接收");
     const batch = result as unknown as InboxResult;
-    if (batch.wait_ms) { deferred = batch.wait_ms; dirty = true; return; }
+    if (batch.wait_ms) {
+      roomStatus(ctx, selected, "", batch.display_stats);
+      deferred = batch.wait_ms; dirty = true; return;
+    }
     deferred = 0;
-    const details: Details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next };
+    const details: Details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next,
+      stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name) };
     if (!batch.total_events) {
-      if (canonical(checkpoint) !== canonical(batch.next)) pi.appendEntry("collab.cursor", details);
+      if (canonical(checkpoint) !== canonical(batch.next) || canonical(state.stats.get(selected.task_id)) !== canonical(batch.display_stats)) pi.appendEntry("collab.cursor", details);
+      roomStatus(ctx, selected, "", batch.display_stats);
       return;
     }
     details.delivery_id = newId();
@@ -328,7 +346,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
         const error = result.error as { code: string; message: string };
         if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
           pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true } satisfies Details);
-          release(); roomStatus(ctx, selected, "已被接替 · 只读");
+          release(); roomStatus(ctx, selected, "已被接替（只读）");
         } else {
           if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
             pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, blocked: true } satisfies Details);
@@ -339,10 +357,12 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       }
       failures = 0; lastError = undefined;
       const batch = result as unknown as InboxResult;
+      roomStatus(ctx, selected, "", batch.display_stats);
       if (!batch.total_events) return;
       dirty ||= batch.omitted_events > 0;
       const details: Details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis,
-        delivery_id: newId(), viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
+        delivery_id: newId(), stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name),
+        viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
       const entry: CustomMessageEntryDraft = { type: "custom_message", customType: "collab.batch", content: inboxText(batch), details, display: true };
       return { entries: [...event.entries, entry], continue: true };
     } catch (error) {

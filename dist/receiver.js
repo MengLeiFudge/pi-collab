@@ -1,9 +1,10 @@
 import { existsSync, watch } from "node:fs";
-import { canonical, excerpt, inboxText, newId } from "./protocol.js";
+import { canonical, inboxText, newId } from "./protocol.js";
+import { receivedSummary } from "./rendering.js";
 import { changeSignal, dataDirectory } from "./signals.js";
 /** 原生分支条目是交付证据；新进度不会被迟到的旧批次回退。 */
 export function branchState(ctx, pending) {
-    const state = { checkpoints: new Map(), resets: new Map(), blocked: new Set(), memberships: new Map(), superseded: new Set(), viewed: new Map(), deliveredBatches: new Set() };
+    const state = { checkpoints: new Map(), resets: new Map(), blocked: new Set(), memberships: new Map(), superseded: new Set(), viewed: new Map(), deliveredBatches: new Set(), stats: new Map() };
     const apply = (details, toolId, automatic = false) => {
         if (!details || details.collab_version !== 2 || details.session_id !== ctx.sessionManager.getSessionId())
             return;
@@ -25,6 +26,7 @@ export function branchState(ctx, pending) {
                         state.resets.set(taskId, details.membership.lease);
                     state.checkpoints.delete(taskId);
                     state.viewed.delete(taskId);
+                    state.stats.delete(taskId);
                 }
                 state.blocked.delete(taskId);
                 state.superseded.delete(taskId);
@@ -41,6 +43,7 @@ export function branchState(ctx, pending) {
             state.checkpoints.delete(taskId);
             state.blocked.delete(taskId);
             state.viewed.delete(taskId);
+            state.stats.delete(taskId);
         }
         if (taskId && details.blocked)
             state.blocked.add(taskId);
@@ -56,6 +59,8 @@ export function branchState(ctx, pending) {
                 viewed.set(message.id, message.event_seq);
             state.viewed.set(taskId, viewed);
         }
+        if (taskId && details.stats)
+            state.stats.set(taskId, details.stats);
     };
     let pendingStored = false;
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -88,10 +93,18 @@ export function branchState(ctx, pending) {
 export function piModel(ctx) {
     return ctx.model?.name ? { name: ctx.model.name, provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
-/** 底部以主题和模型为入口；稳定房间身份由菜单的复制加入指令提供。 */
-export function roomStatus(ctx, selected, note) {
+/** 状态栏保留完整名称；消息计数随现有查询采样，异常状态替代未读段。 */
+export function roomStatus(ctx, selected, note = "", stats) {
+    stats ??= branchState(ctx).stats.get(selected.task_id);
+    const parts = ["collab", stats?.title ?? selected.title ?? "房间", ctx.model?.name ?? "模型未就绪"];
+    if (stats)
+        parts.push(`消息 ${stats.total}`);
+    if (note)
+        parts.push(note);
+    else if (stats)
+        parts.push(`未读 ${stats.unread}`);
     if (ctx.hasUI)
-        ctx.ui.setStatus("collab", `collab ${excerpt(selected.title ?? "房间", 18)} · ${excerpt(ctx.model?.name ?? "模型未就绪", 24)} · ${note}`);
+        ctx.ui.setStatus("collab", parts.join(" · "));
 }
 /** 忙碌时只记录变化；空闲时合并未读内容并启动当前会话。 */
 export function registerReceiver(pi, invoke) {
@@ -139,7 +152,11 @@ export function registerReceiver(pi, invoke) {
     const report = (ctx, error) => {
         const message = error instanceof Error ? error.message : String(error);
         if (ctx.hasUI) {
-            ctx.ui.setStatus("collab", "collab 接收暂停");
+            const selected = branchState(ctx, pendingTool).selected;
+            if (selected)
+                roomStatus(ctx, selected, "接收暂停");
+            else
+                ctx.ui.setStatus("collab", "collab · 未加入");
             if (message !== lastError)
                 ctx.ui.notify(`collab：${message}`, "warning");
         }
@@ -163,10 +180,10 @@ export function registerReceiver(pi, invoke) {
         }
         if (!member || state.superseded.has(selected.task_id) || ctx.model?.name !== member.model.name) {
             release();
-            roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "已被接替 · 只读" : "待加入");
+            roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "已被接替（只读）" : "未加入", state.stats.get(selected.task_id));
             return;
         }
-        roomStatus(ctx, selected, "空闲接收");
+        roomStatus(ctx, selected, paused || state.blocked.has(selected.task_id) ? "接收暂停" : "", state.stats.get(selected.task_id));
         if (!watcher) {
             if (watchFailures >= 3) {
                 report(ctx, "目录监听连续失败；使用 /collab info 或 reload 后重新绑定");
@@ -208,10 +225,8 @@ export function registerReceiver(pi, invoke) {
             else
                 return;
         }
-        if (state.blocked.has(selected.task_id)) {
-            roomStatus(ctx, selected, "需核对恢复状态");
+        if (state.blocked.has(selected.task_id))
             return;
-        }
         const scope = epoch;
         const checkpoint = state.checkpoints.get(selected.task_id);
         const sessionId = ctx.sessionManager.getSessionId();
@@ -239,7 +254,7 @@ export function registerReceiver(pi, invoke) {
             if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
                 pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true });
                 release();
-                roomStatus(ctx, selected, "已被接替 · 只读");
+                roomStatus(ctx, selected, "已被接替（只读）");
                 return;
             }
             if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
@@ -251,18 +266,20 @@ export function registerReceiver(pi, invoke) {
         }
         failures = 0;
         lastError = undefined;
-        roomStatus(ctx, selected, "空闲接收");
         const batch = result;
         if (batch.wait_ms) {
+            roomStatus(ctx, selected, "", batch.display_stats);
             deferred = batch.wait_ms;
             dirty = true;
             return;
         }
         deferred = 0;
-        const details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next };
+        const details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next,
+            stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name) };
         if (!batch.total_events) {
-            if (canonical(checkpoint) !== canonical(batch.next))
+            if (canonical(checkpoint) !== canonical(batch.next) || canonical(state.stats.get(selected.task_id)) !== canonical(batch.display_stats))
                 pi.appendEntry("collab.cursor", details);
+            roomStatus(ctx, selected, "", batch.display_stats);
             return;
         }
         details.delivery_id = newId();
@@ -373,7 +390,7 @@ export function registerReceiver(pi, invoke) {
                 if (["SUPERSEDED", "JOIN_REQUIRED", "MODEL_UNAVAILABLE"].includes(error.code)) {
                     pi.appendEntry("collab.cursor", { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis, superseded: true });
                     release();
-                    roomStatus(ctx, selected, "已被接替 · 只读");
+                    roomStatus(ctx, selected, "已被接替（只读）");
                 }
                 else {
                     if (["GENERATION_CHANGED", "HISTORY_DIVERGED", "DATABASE_CHANGED"].includes(error.code)) {
@@ -388,11 +405,13 @@ export function registerReceiver(pi, invoke) {
             failures = 0;
             lastError = undefined;
             const batch = result;
+            roomStatus(ctx, selected, "", batch.display_stats);
             if (!batch.total_events)
                 return;
             dirty ||= batch.omitted_events > 0;
             const details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis,
-                delivery_id: newId(), viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
+                delivery_id: newId(), stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name),
+                viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
             const entry = { type: "custom_message", customType: "collab.batch", content: inboxText(batch), details, display: true };
             return { entries: [...event.entries, entry], continue: true };
         }

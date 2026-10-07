@@ -32,7 +32,7 @@ export function createAdapter(invoke, epoch) {
             return { content: [{ type: "text", text: "成员设置和离开由用户通过 /collab 菜单控制。" }], details: { collab_version: 2, session_id: sessionId }, isError: true };
         const discovery = params.command === "open" && input.action === "rooms";
         const invite = params.command === "open" && input.action === "invite";
-        const details = { collab_version: 2, session_id: sessionId };
+        const details = { collab_version: 2, session_id: sessionId, model_name: model?.name, command: params.command };
         const userRelease = params.command === "open" && input.action === "release-scopes" && params.userAction === true;
         if (userRelease)
             input.user_action = true;
@@ -91,7 +91,7 @@ export function createAdapter(invoke, epoch) {
             if (!params.reset && !joining && selected) {
                 input.database_id ??= selected.database_id;
                 input.generation ??= selected.generation;
-                if (writing || params.command === "read" && !freeQuery && input.view !== "index")
+                if (writing || params.command === "open" || params.command === "read" && !freeQuery && input.view !== "index")
                     input.after ??= checkpoint?.after;
             }
             if (params.command === "read") {
@@ -119,6 +119,8 @@ export function createAdapter(invoke, epoch) {
             const result = await invoke(params.command, input, ctx, signal);
             requireValue(scope === epoch() && sessionId === ctx.sessionManager.getSessionId() && model?.name === piModel(ctx)?.name, "CONTEXT_CHANGED", "调用期间会话、分支或选中模型已变化；写入可能已经完成，请用原 request_id 核对");
             const nextSelection = selection(result);
+            details.stats = result.display_stats;
+            delete result.display_stats;
             details.result = result;
             if (result.left === true) {
                 details.clear_selection = true;
