@@ -1,3 +1,4 @@
+import { localBridge } from "./bridge.ts";
 import { createRoom } from "./creation.ts";
 import { listAssignments, pendAssignments, releaseByUser, showAssignment, updateAssignment } from "./assignments.ts";
 import { dutyInput, invitation, updateDuty } from "./duties.ts";
@@ -112,6 +113,7 @@ function readWindow(store: Store, task: Task, request: Request, after: Anchor): 
 
 /** 核心 read 无服务端游标；下一页输入由调用方保存和传回。 */
 function readTask(store: Store, task: Task, request: Request): Record<string, unknown> {
+  if (request.bridge !== undefined) return { ...identity(store, task), ...localBridge(store, task, request) };
   if (request.view === "assignments") {
     requireValue(!hasQuery(request), "INPUT", "分工列表不能混用消息选择器");
     return { ...identity(store, task), ...listAssignments(store, task, request) };
@@ -195,10 +197,10 @@ function writeTask(store: Store, request: Request): Record<string, unknown> {
   let value: Record<string, unknown>;
   if (request.command === "post") value = post(store, task, request, author, memberId);
   else if (request.command === "update") {
-    requireValue([request.progress, request.duty, request.assignment].filter(value => value !== undefined).length <= 1, "INPUT", "progress/duty/assignment 不能混用");
-    if (request.duty !== undefined || request.assignment !== undefined) requireValue(["body", "base_revision", "title", "summary", "status", "restore_revision", "base_progress"].every(key => request[key] === undefined), "INPUT", "职责/分工不能混用文档或推进状态字段");
+    requireValue([request.progress, request.duty, request.assignment, request.bridge].filter(value => value !== undefined).length <= 1, "INPUT", "progress/duty/assignment/bridge 不能混用");
+    if (request.duty !== undefined || request.assignment !== undefined || request.bridge !== undefined) requireValue(["body", "base_revision", "title", "summary", "status", "restore_revision", "base_progress"].every(key => request[key] === undefined), "INPUT", "职责/分工不能混用文档或推进状态字段");
     const member = requireMember(store, task, request);
-    value = request.duty !== undefined ? updateDuty(store, task, request, member, author) : request.assignment !== undefined ? updateAssignment(store, task, request, member, author) : request.progress === undefined ? update(store, task, request, author) : updateProgress(store, task, request, author);
+    value = request.bridge !== undefined ? localBridge(store, task, request) : request.duty !== undefined ? updateDuty(store, task, request, member, author) : request.assignment !== undefined ? updateAssignment(store, task, request, member, author) : request.progress === undefined ? update(store, task, request, author) : updateProgress(store, task, request, author);
   }
   else value = resolveIssue(store, task, request, author);
   return finishWrite(store, request, context, value);

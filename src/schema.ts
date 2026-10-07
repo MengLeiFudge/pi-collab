@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { newId, requireValue } from "./protocol.ts";
 
 /** 群聊持久化版本；业务连接与备份恢复只接受此版本。 */
-export const schemaVersion = 1;
+export const schemaVersion = 2;
 
 /** 空库一次性建立完整结构，房间与首版合同在业务事务中创建。 */
 const initialSchema = `
@@ -124,10 +124,53 @@ export function createSchema(db: DatabaseSync): void {
   requireValue(db.isTransaction, "SCHEMA", "初始化 schema 必须在写事务内执行");
   db.exec(initialSchema);
   db.prepare("INSERT INTO metadata(singleton,database_id,generation) VALUES(1,?,?)").run(newId(), newId());
-  const tables = ["metadata", "projects", "tasks", "revisions", "messages", "issues", "events", "requests", "members", "member_views", "progress_revisions", "snapshots", "assignments", "assignment_revisions", "creation_requests"];
-  for (const table of tables) {
+  upgradeSchema(db);
+}
+
+/** 为新库及公开 schema 1 升级追加桥接结构；调用者负责门禁和备份。 */
+export function upgradeSchema(db: DatabaseSync): void {
+  requireValue(db.isTransaction, "SCHEMA", "升级必须在写事务内执行");
+  db.exec(`
+    ALTER TABLE members ADD COLUMN kind TEXT NOT NULL DEFAULT 'pi' CHECK(kind IN ('pi','external'));
+    CREATE TABLE bridge_batches (
+      id TEXT PRIMARY KEY, bridge_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id),
+      generation TEXT NOT NULL, group_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+      message_id TEXT NOT NULL REFERENCES messages(id), created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE bridge_sources (
+      bridge_id TEXT NOT NULL, platform_id TEXT NOT NULL, group_id TEXT NOT NULL, message_id TEXT NOT NULL,
+      batch_id TEXT NOT NULL REFERENCES bridge_batches(id), sender_id TEXT NOT NULL,
+      received_at INTEGER NOT NULL, body TEXT,
+      PRIMARY KEY(bridge_id,platform_id,group_id,message_id)
+    ) STRICT;
+    CREATE TABLE bridge_decisions (
+      id TEXT PRIMARY KEY, bridge_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id),
+      generation TEXT NOT NULL, contract_revision TEXT NOT NULL REFERENCES revisions(id),
+      batch_id TEXT NOT NULL REFERENCES bridge_batches(id), member_id TEXT NOT NULL REFERENCES members(id),
+      question TEXT NOT NULL, options TEXT NOT NULL, content_hash TEXT NOT NULL, expires_at INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','answered','cancelled')),
+      reply TEXT, created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE bridge_outbox (
+      seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, bridge_id TEXT NOT NULL,
+      task_id TEXT NOT NULL REFERENCES tasks(id), generation TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('decision','conclusion')), target TEXT NOT NULL,
+      body TEXT NOT NULL, decision_id TEXT REFERENCES bridge_decisions(id),
+      acked INTEGER NOT NULL DEFAULT 0 CHECK(acked IN (0,1)), created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE bridge_requests (
+      bridge_id TEXT NOT NULL, generation TEXT NOT NULL, request_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL, result TEXT NOT NULL,
+      PRIMARY KEY(bridge_id,generation,request_id)
+    ) STRICT;
+    CREATE INDEX bridge_raw_expiry ON bridge_sources(received_at) WHERE body IS NOT NULL;
+    CREATE INDEX bridge_pending ON bridge_outbox(bridge_id,generation,acked,seq);
+  `);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
+  for (const { name: table } of tables) {
     for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
-      db.exec(`CREATE TRIGGER protocol_${table}_${operation.toLowerCase()} BEFORE ${operation} ON ${table}
+      db.exec(`DROP TRIGGER IF EXISTS protocol_${table}_${operation.toLowerCase()};
+CREATE TRIGGER protocol_${table}_${operation.toLowerCase()} BEFORE ${operation} ON ${table}
 BEGIN SELECT CASE WHEN collab_protocol() != ${schemaVersion} THEN RAISE(ABORT,'COLLAB_PROTOCOL') END; END;`);
     }
   }

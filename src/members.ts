@@ -12,7 +12,7 @@ export interface Membership { member_id: string; lease: string }
 
 /** 持久化成员保留历史加入记录；owner 为空不代表成员被删除。 */
 export interface Member {
-  id: string; task_id: string; name: string; model: string;
+  id: string; task_id: string; name: string; model: string; kind: "pi" | "external";
   owner_client: string | null; owner_session: string | null; lease: string | null;
   claimed_generation: string | null; joined_at: string; updated_at: string; urgent_enabled: number; duty: string; duty_revision: string | null;
 }
@@ -40,7 +40,7 @@ export function currentMember(store: Store, task: Task, request: Request): Membe
   const claim = membership(request.membership);
   if (!claim) return undefined;
   const member = store.one<Member>("SELECT * FROM members WHERE id=? AND task_id=?", claim.member_id, task.id);
-  if (!member || member.owner_client !== request.client || member.owner_session !== request.session_id ||
+  if (!member || member.kind !== "pi" || member.owner_client !== request.client || member.owner_session !== request.session_id ||
     member.lease !== claim.lease || member.claimed_generation !== store.metadata().generation) return undefined;
   if (request.model !== undefined && selectedModel(request).name !== member.name) return undefined;
   return member;
@@ -73,6 +73,7 @@ export function joinRoom(store: Store, task: Task, request: Request, cursor: Cur
     return result;
   }
   const before = store.one<Member>("SELECT * FROM members WHERE task_id=? AND name=?", task.id, model.name);
+  requireValue(!before || before.kind === "pi", "IDENTITY", "外部成员不能由 Pi 接替");
   const id = before?.id ?? newId();
   const lease = newId();
   const now = new Date().toISOString();
@@ -105,7 +106,7 @@ export function authorFor(request: Request, member: Member): string {
 /** 作者显示名取写入时保存的模型名，接替不改变历史显示。 */
 export function publicAuthor(raw: string): Author {
   const author = JSON.parse(raw) as Author;
-  return { ...author, name: author.model.name };
+  return { ...author, name: author.kind === "external" ? author.name : author.model?.name };
 }
 
 /** 成员列表不代表在线人数；分页避免大量历史成员占满一次工具输出。 */

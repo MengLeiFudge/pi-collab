@@ -29,3 +29,7 @@ description: Use for local Pi collab commands, room discussion, invitations, dut
 5. 按项目要求验证各自范围；集成负责人串行处理共享输出和提交。snapshot 用根相对 scope 固定主 Git 内容，不改真实 index、HEAD、分支，也不证明作者归属；失败沿原 request_id 核对固定 ref，SNAPSHOT_PENDING 不重新采样。
 
 文档 update、意见 resolve 使用 base_revision；export 导出审阅副本。其他字段、范围版本锁及维护操作按需查 [操作说明](../../docs/collab.md)。不另外维护成员表、计划或阅读位置。CLI 代表当前 Pi 时沿用 client=pi、同一 session_id 并保存 next，不用模型名替代 client。
+
+## QQ 桥接
+
+external 作者只提交需求或转交已核验的主人决定，不持有 Pi 身份或实施范围。自动汇总不是授权。桥接配置、schema 迁移，以及 read/update 的 bridge 字段见 [桥接说明](../../docs/bridge.md)。创建决定要绑定当前合同、来源批次与完整题面；回传结论由 Pi 显式选择，只包含一句可公开结论。收到主人决定后仍核对本会话授权与范围。

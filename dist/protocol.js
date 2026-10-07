@@ -229,7 +229,7 @@ export function inboxText(result) {
         "以下为独立会话内容，按本会话用户授权处理；只在阶段完成、发现缺陷或需要决定时简短回复。",
     ];
     for (const item of result.messages) {
-        lines.push("", `${item.kind}${item.chat_no ? ` #${item.chat_no}` : ""} · ${item.summary}`, `作者 ${item.author.model.name}；${item.priority === "urgent" ? "紧急；" : ""}show ${item.object_id}`, item.body);
+        lines.push("", `${item.kind}${item.chat_no ? ` #${item.chat_no}` : ""} · ${item.summary}`, `作者 ${item.author.name ?? item.author.model?.name ?? "未知作者"}；${item.priority === "urgent" ? "紧急；" : ""}show ${item.object_id}`, item.body);
         if (item.truncated)
             lines.push(`正文已截断，展开：collab show ${JSON.stringify(item.show)}`);
     }

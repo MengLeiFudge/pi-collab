@@ -6,7 +6,7 @@ import { failure, requireValue } from "./protocol.ts";
 async function input(args: string[]): Promise<{ command: string; value: Record<string, unknown> }> {
   const command = args.shift() || "help";
   if (command === "--help" || command === "help") {
-    process.stdout.write("collab open|read|show|post|update|resolve|export|snapshot [--input FILE | --json JSON] [--client NAME] [--session-id ID]\ncollab maintain backups|backup|restore|recover [相同输入选项]\n省略 --input/--json 时从标准输入读取 JSON；身份也可由 COLLAB_CLIENT/COLLAB_SESSION_ID 注入。\nCLI open 默认只读；join:true 配合 model、request_id 加入，写入附 membership 凭证。Pi 原生工具自动处理身份。read 缺省未读，也支持 latest/range/matches 与 author/keyword；续页传 next。详细字段见 docs/collab.md。\n");
+    process.stdout.write("collab open|read|show|post|update|resolve|export|snapshot [--input FILE | --json JSON] [--client NAME] [--session-id ID]\ncollab maintain backups|backup|restore|recover|migrate [相同输入选项]\n省略 --input/--json 时从标准输入读取 JSON；身份也可由 COLLAB_CLIENT/COLLAB_SESSION_ID 注入。\nCLI open 默认只读；join:true 配合 model、request_id 加入，写入附 membership 凭证。Pi 原生工具自动处理身份。read 缺省未读，也支持 latest/range/matches 与 author/keyword；续页传 next。详细字段见 docs/collab.md。\n");
     return { command: "help", value: {} };
   }
   let action: string | undefined;
@@ -58,6 +58,16 @@ async function main(): Promise<void> {
     const { execute, requestFrom } = await import("./service.ts");
     const parsed = await input(process.argv.slice(2));
     if (parsed.command === "help") return;
+    if (parsed.command === "maintain" && parsed.value.action === "migrate") {
+      const { migrate } = await import("./migration.ts");
+      process.stdout.write(JSON.stringify(await migrate()) + "\n");
+      return;
+    }
+    if (parsed.command === "bridge") {
+      const { executeBridge } = await import("./bridge.ts");
+      process.stdout.write(JSON.stringify(executeBridge(parsed.value)) + "\n");
+      return;
+    }
     const controller = new AbortController();
     const cancel = (): void => controller.abort();
     if (parsed.command === "snapshot") {

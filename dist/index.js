@@ -1,3 +1,4 @@
+import { registerBridge } from "./bridge-http.js";
 import { ProcessRunner, nodeExecutable } from "./processes.js";
 import { agentDirectory } from "./signals.js";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,7 @@ export default function collabExtension(pi) {
             throw new Error(`collab CLI：${output.stderr || (error instanceof Error ? error.message : error)}`);
         }
     };
+    registerBridge(pi, invoke);
     const receiver = registerReceiver(pi, invoke);
     let epoch = 0;
     const run = createAdapter(invoke, () => epoch);

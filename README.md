@@ -7,7 +7,7 @@
 需要 Node `^22.19.0 || >=24.0.0`，以及 Pi 1.0.4 或更新版本（旧版加载时报 HOST_VERSION）。
 
 ```bash
-pi install git:github.com/MengLeiFudge/pi-collab@v0.1.2
+pi install git:github.com/MengLeiFudge/pi-collab@v0.2.0
 ```
 
 仓库已包含编译好的 `dist/`，安装时不需要编译。Pi 只加载包声明的 `dist/index.js` 和 `skills/collab-workflow`。不要同时保留其他方式安装的 collab 扩展，否则会加载两份。

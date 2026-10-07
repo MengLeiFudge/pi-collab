@@ -21,7 +21,7 @@ export function currentMember(store, task, request) {
     if (!claim)
         return undefined;
     const member = store.one("SELECT * FROM members WHERE id=? AND task_id=?", claim.member_id, task.id);
-    if (!member || member.owner_client !== request.client || member.owner_session !== request.session_id ||
+    if (!member || member.kind !== "pi" || member.owner_client !== request.client || member.owner_session !== request.session_id ||
         member.lease !== claim.lease || member.claimed_generation !== store.metadata().generation)
         return undefined;
     if (request.model !== undefined && selectedModel(request).name !== member.name)
@@ -51,6 +51,7 @@ export function joinRoom(store, task, request, cursor) {
         return result;
     }
     const before = store.one("SELECT * FROM members WHERE task_id=? AND name=?", task.id, model.name);
+    requireValue(!before || before.kind === "pi", "IDENTITY", "外部成员不能由 Pi 接替");
     const id = before?.id ?? newId();
     const lease = newId();
     const now = new Date().toISOString();
@@ -80,7 +81,7 @@ export function authorFor(request, member) {
 /** 作者显示名取写入时保存的模型名，接替不改变历史显示。 */
 export function publicAuthor(raw) {
     const author = JSON.parse(raw);
-    return { ...author, name: author.model.name };
+    return { ...author, name: author.kind === "external" ? author.name : author.model?.name };
 }
 /** 成员列表不代表在线人数；分页避免大量历史成员占满一次工具输出。 */
 export function roomInfo(store, task, request) {

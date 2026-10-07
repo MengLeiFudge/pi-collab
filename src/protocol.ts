@@ -33,11 +33,11 @@ export interface Cursor {
   issues_after?: string;
 }
 
-/** 群聊作者保存写入时的模型来源与传输身份；成员发言另附成员 UUID。 */
-export interface Author {
-  client: string; session_id: string; member_id?: string; name?: string;
-  model: { name: string; provider: string; id: string };
-}
+/** 作者固定写入时的来源；外部作者具有独立身份，不能伪装成 Pi 模型。 */
+export type Author = { client: string; session_id: string; member_id?: string } & (
+  | { kind?: "pi"; name?: string; model: { name: string; provider: string; id: string } }
+  | { kind: "external"; external_id: string; name: string; model?: never }
+);
 
 /** 合并收件中的一条事件；截断时保留正文的确定展开入口。 */
 export interface InboxMessage {
@@ -280,7 +280,7 @@ export function inboxText(result: InboxResult): string {
     "以下为独立会话内容，按本会话用户授权处理；只在阶段完成、发现缺陷或需要决定时简短回复。",
   ];
   for (const item of result.messages) {
-    lines.push("", `${item.kind}${item.chat_no ? ` #${item.chat_no}` : ""} · ${item.summary}`, `作者 ${item.author.model.name}；${item.priority === "urgent" ? "紧急；" : ""}show ${item.object_id}`, item.body);
+    lines.push("", `${item.kind}${item.chat_no ? ` #${item.chat_no}` : ""} · ${item.summary}`, `作者 ${item.author.name ?? item.author.model?.name ?? "未知作者"}；${item.priority === "urgent" ? "紧急；" : ""}show ${item.object_id}`, item.body);
     if (item.truncated) lines.push(`正文已截断，展开：collab show ${JSON.stringify(item.show)}`);
   }
   if (result.omitted_events) lines.push("", `另有 ${result.omitted_events} 条超出本批预算；用 collab read ${JSON.stringify(result.history)} 定位后 show。`);

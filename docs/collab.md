@@ -2,7 +2,7 @@
 
 ## 房间与身份
 
-工具 `collab` 用 `command` 选择命令、`input` 传业务字段。Pi 自动传当前完整模型名称、会话 ID、成员 lease 和阅读位置；不要伪造身份。仅用户独立启动的同机 Pi 会话参与，不自动创建 AI 进程。
+工具 `collab` 用 `command` 选择命令、`input` 传业务字段。Pi 自动传当前完整模型名称、会话 ID、成员 lease 和阅读位置；不要伪造身份。实施成员仅来自用户独立启动的同机 Pi 会话，不自动创建 AI 进程。配置 QQ 桥接后，可出现 external 类型成员，其需求摘要不扩大授权，也没有 Pi model/lease 或实施权限；配置与 read/update bridge 入口见 [桥接说明](bridge.md)。
 
 `open {create:true,title,body}` 直接创建数据库房间并加入，项目默认为 Pi 当前目录。`open {task_id}` 加入既有房间。`open {action:"rooms",topic}` 查本项目主题，结果中的 decision 指示唯一匹配或需选择；相近名称不是自动加入依据。`open {action:"invite"}` 生成可粘贴的邀请，可带用户已指定的 invite_duty、invite_scope；invite_scope 接受文本或 1–64 项非空字符串数组，数组以“、”连接，结果限 2048 UTF-8 字节。`/collab` 是用户菜单，保留显式 join/rejoin/info/copy/scopes 命令。
 
@@ -53,6 +53,6 @@ Pi 在可能提交前固定 request_id，成功和失败都返回它。超时/�
 
 无 task_id 的新建请求先以 open create:true、prepare_creation:true 取得 database_id 和 generation，再沿同一 request_id 提交。准备步骤不创建房间；Pi 自动执行。建房失败重试必须带原 request_id、database_id、generation，不能重新选世代。实际创建、项目登记、首版、加入和创建去重在一个事务内；旧加入请求不能夺回失效身份。
 
-维护命令为 `pi-collab maintain backups|backup|restore|recover --input 请求.json`。数据库使用 schema 1，连接与恢复源都必须匹配该版本。维护会影响共享库，应先协调在途操作。恢复前先备份当前库，并保护选中的恢复源；恢复前备份失败阻止操作，例行备份失败告警。轮换保留七个普通备份及当前受保护的恢复源。恢复可读库使用 SQLite backup API 写回，不替换正在使用的主数据库文件；损坏库不自动抢救替换。备份中的维护标记由正规恢复入口处理，不把备份直接当业务库打开。
+维护命令为 `pi-collab maintain backups|backup|restore|recover --input 请求.json`。数据库使用 schema 2，连接与普通恢复源都必须匹配该版本。公开 schema 1 通过 maintain migrate 显式备份升级，迁移前备份的离线回退步骤见 [桥接说明](bridge.md)。维护会影响共享库，应先协调在途操作。恢复前先备份当前库，并保护选中的恢复源；恢复前备份失败阻止操作，例行备份失败告警。轮换保留七个普通备份及当前受保护的恢复源。恢复可读库使用 SQLite backup API 写回，不替换正在使用的主数据库文件；损坏库不自动抢救替换。备份中的维护标记由正规恢复入口处理，不把备份直接当业务库打开。
 
 recover 只有确认原维护进程已不存在时接管；未知、权限拒绝、PID 可能复用都不擅自解锁。恢复更换 generation，外部引用须保留 UUID 和世代。旧请求、游标及缓存不能自动改绑新世代。
