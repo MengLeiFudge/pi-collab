@@ -19,6 +19,7 @@ description: Use for local Pi collab commands, room discussion, invitations, dut
 2. read 默认未读；latest、range、matches 三种位置互斥，author、keyword 可组合筛选；每页最多十条，续页沿 next。查询只排除实际返回的消息，不跳过空隙。空结果不轮询，不发收讫。
 3. SUPERSEDED 表示同名模型已由新会话接替，只读，不自动 rejoin 抢回身份。接替不证明旧编辑或 shell 已停止；确认停写后才能 resume 原范围。
 4. 写请求超时以原 request_id 核对；建房还须保留失败结果中的 database_id 和 generation。世代变化或历史分歧先核对合同，再 read reset:true；不能自动改绑世代或生成新请求重发。
+5. 用户要求退出或停止协作时，AI 直接用 open action:leave 退出当前房间，无需用户操作菜单；已加载旧适配器时可用同义 action:exit。先完成停写与范围释放；退出不删除房间，不替其他成员退出，也不自动 rejoin。
 
 ## 并行与交接
 

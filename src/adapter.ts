@@ -38,7 +38,8 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
     const model = piModel(ctx);
     const input: Record<string, unknown> = { ...params.input, client: "pi", session_id: sessionId, model };
     for (const field of ["membership", "join", "automatic", "delivered", "urgent_only", "user_action", "prepare_creation"]) delete input[field];
-    if (!params.userAction && ["leave", "preferences", "release-scopes"].includes(String(input.action))) return { content: [{ type: "text", text: "成员设置和离开由用户通过 /collab 菜单控制。" }], details: { collab_version: 2, session_id: sessionId }, isError: true };
+    if (!params.userAction && ["preferences", "release-scopes"].includes(String(input.action))) return { content: [{ type: "text", text: "成员设置和解除他人范围由用户通过 /collab 菜单控制。" }], details: { collab_version: 2, session_id: sessionId }, isError: true };
+    const leaving = params.command === "open" && ["leave", "exit"].includes(String(input.action));
     const discovery = params.command === "open" && input.action === "rooms";
     const invite = params.command === "open" && input.action === "invite";
     const details: Details = { collab_version: 2, session_id: sessionId, model_name: model?.name, command: params.command };
@@ -53,7 +54,7 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
       input.request_id ??= requestId(sessionId, callId);
       if (typeof input.request_id === "string") details.request_id = input.request_id;
     };
-    if (writing || params.command === "open" && !params.inspect) fixRequest();
+    if (writing || leaving || params.command === "open" && !params.inspect) fixRequest();
     try {
       requireValue(!params.reset || params.command === "read" && !freeQuery && !input.counts_only && (input.view === undefined || input.view === "content"), "INPUT", "reset 仅用于未读正文，不能重置自由查询或事件索引");
       requireValue(input.rejoin === undefined || typeof input.rejoin === "boolean", "INPUT", "rejoin 必须为布尔值");
@@ -73,7 +74,8 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
       details.task_id = taskId || undefined;
       details.lease = claim?.lease;
       if (selected) details.selection = selected;
-      joining = params.command === "open" && !params.inspect && !invite && !discovery && !userRelease && !!(taskId || input.create === true) &&
+      // 退出只使用已有凭证；不能因身份缺失、模型切换或重试先加入房间。
+      joining = params.command === "open" && !params.inspect && !invite && !discovery && !userRelease && !leaving && !!(taskId || input.create === true) &&
         (!claim || input.rejoin === true || claim.model.name !== model?.name || params.input?.request_id !== undefined);
       delete input.rejoin;
       if (joining) {
@@ -136,7 +138,7 @@ export function createAdapter(invoke: Invoke, epoch: () => number) {
           details.viewed = (result.messages as ViewedMessage[]).map(message => ({ id: message.id, event_seq: message.event_seq }));
         }
       }
-      if (writing || joining) result.request_id = input.request_id;
+      if (writing || joining || leaving) result.request_id = input.request_id;
       if (input.create === true && result.ok === false) {
         result.database_id ??= input.database_id; result.generation ??= input.generation;
       }

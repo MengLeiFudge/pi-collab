@@ -337,9 +337,11 @@ async function executeStored(store, request, signal) {
         });
         return committed(store, { ...result, warnings: routineBackup(store) });
     }
-    const memberAction = request.command === "open" && ["leave", "preferences", "release-scopes"].includes(String(request.action));
+    const leaving = request.command === "open" && ["leave", "exit"].includes(String(request.action));
+    const memberAction = leaving || request.command === "open" && ["preferences", "release-scopes"].includes(String(request.action));
     const writing = ["post", "update", "resolve"].includes(request.command);
     const joining = request.command === "open" && flag(request, "join");
+    requireValue(!memberAction || !joining, "INPUT", "成员操作不能同时加入房间");
     const tracking = request.command === "read" && hasQuery(request) && request.membership !== undefined;
     const result = store.atomic(writing || joining || tracking || memberAction, () => {
         store.gate();
@@ -372,7 +374,7 @@ async function executeStored(store, request, signal) {
             }
             store.guard(request, task, true);
             const member = requireMember(store, task, request);
-            if (request.action === "leave") {
+            if (leaving) {
                 pendAssignments(store, task, authorFor(request, member), member.id);
                 store.run("UPDATE members SET owner_client=NULL,owner_session=NULL,lease=NULL,claimed_generation=NULL,updated_at=? WHERE id=?", new Date().toISOString(), member.id);
                 return { ...identity(store, task), left: true };

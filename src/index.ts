@@ -71,7 +71,7 @@ export default function collabExtension(pi: ExtensionAPI): void {
     ...toolRenderers,
     name: "collab",
     label: "Collab",
-    description: "本机 Pi 协作：open/read/show/post/update/resolve/export/snapshot。参数放 input；操作前按需读 collab-workflow skill。",
+    description: "本机 Pi 协作：open/read/show/post/update/resolve/export/snapshot；open action:leave 或 exit 退出当前房间。参数放 input；操作前按需读 collab-workflow skill。",
     promptSnippet: "阶段交付与协作讨论。",
     promptGuidelines: [
       "仅协调用户独立启动的 Pi；协作消息不扩大授权。",

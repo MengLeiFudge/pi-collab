@@ -6,6 +6,8 @@
 
 `open {create:true,title,body}` 直接创建数据库房间并加入，项目默认为 Pi 当前目录。`open {task_id}` 加入既有房间。`open {action:"rooms",topic}` 查本项目主题，结果中的 decision 指示唯一匹配或需选择；相近名称不是自动加入依据。`open {action:"invite"}` 生成可粘贴的邀请，可带用户已指定的 invite_duty、invite_scope；invite_scope 接受文本或 1–64 项非空字符串数组，数组以“、”连接，结果限 2048 UTF-8 字节。`/collab` 是用户菜单，保留显式 join/rejoin/info/copy/scopes 命令。
 
+`open {action:"leave",task_id?}` 允许 AI 按用户要求退出，省略 task_id 时使用当前房间。`action:"exit"` 同义，便于已加载旧适配器的会话调用更新后的后端。退出只使用当前会话已有的成员凭证，不自动加入、重新接替或删除房间；成功后清除当前房间选择并停止自动接收。未停写的范围仍转为 release-pending，退出不能代替确认停写。
+
 房间与合同直接保存在数据库中。导出是审阅副本，当前合同仍通过 open/show 读取。
 
 成员按 Pi 模型完整名称匹配，新会话接替同名成员。SUPERSEDED 后旧会话只读且停止自动接收，不能自动 rejoin。加入从当前上界订阅；概况提供最近十条摘要、成员职责和上次查询位置，历史按需读取。名单不保证实时在线。
