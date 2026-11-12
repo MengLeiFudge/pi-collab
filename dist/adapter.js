@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { hasQuery } from "./chat.js";
 import { branchState, piModel } from "./receiver.js";
-import { failure, requireValue } from "./protocol.js";
+import { canonical, failure, requireValue } from "./protocol.js";
+import { sessionName } from "./identity.js";
 import { resultText } from "./presentation.js";
 /** 同一次调用导出稳定请求 UUID；超时后必须显式沿用，不能以新调用号重发。 */
 function requestId(session, call) {
@@ -33,7 +34,8 @@ export function createAdapter(invoke, epoch) {
         const leaving = params.command === "open" && ["leave", "exit"].includes(String(input.action));
         const discovery = params.command === "open" && input.action === "rooms";
         const invite = params.command === "open" && input.action === "invite";
-        const details = { collab_version: 2, session_id: sessionId, model_name: model?.name, command: params.command };
+        const details = { collab_version: 2, session_id: sessionId, model_name: model?.name,
+            member_name: model ? sessionName(model.name, sessionId.slice(0, 8)) : undefined, command: params.command };
         const userRelease = params.command === "open" && input.action === "release-scopes" && params.userAction === true;
         if (userRelease)
             input.user_action = true;
@@ -70,13 +72,19 @@ export function createAdapter(invoke, epoch) {
             selected ??= state.selected?.task_id === taskId ? state.selected : checkpoint;
             claim = state.memberships.get(taskId);
             input.membership = claim;
+            if (model)
+                details.member_name = sessionName(model.name, claim?.short_id ?? sessionId.slice(0, 8));
             details.task_id = taskId || undefined;
             details.lease = claim?.lease;
             if (selected)
                 details.selection = selected;
             // 退出只使用已有凭证；不能因身份缺失、模型切换或重试先加入房间。
             joining = params.command === "open" && !params.inspect && !invite && !discovery && !userRelease && !leaving && !!(taskId || input.create === true) &&
-                (!claim || input.rejoin === true || claim.model.name !== model?.name || params.input?.request_id !== undefined);
+                (!claim || input.rejoin === true || !state.superseded.has(taskId) && canonical(claim.model) !== canonical(model) || params.input?.request_id !== undefined);
+            if (joining && claim && input.rejoin !== true) {
+                input.after ??= checkpoint?.after;
+                input.generation ??= selected?.generation;
+            }
             delete input.rejoin;
             if (joining) {
                 requireValue(model, "MODEL_UNAVAILABLE", "Pi 尚未提供选中模型，不能加入房间");
@@ -119,7 +127,7 @@ export function createAdapter(invoke, epoch) {
                 }
             }
             const result = await invoke(params.command, input, ctx, signal);
-            requireValue(scope === epoch() && sessionId === ctx.sessionManager.getSessionId() && model?.name === piModel(ctx)?.name, "CONTEXT_CHANGED", "调用期间会话、分支或选中模型已变化；写入可能已经完成，请用原 request_id 核对");
+            requireValue(scope === epoch() && sessionId === ctx.sessionManager.getSessionId() && canonical(model) === canonical(piModel(ctx)), "CONTEXT_CHANGED", "调用期间会话、分支或选中模型已变化；写入可能已经完成，请用原 request_id 核对");
             const nextSelection = selection(result);
             details.stats = result.display_stats;
             delete result.display_stats;
@@ -138,7 +146,8 @@ export function createAdapter(invoke, epoch) {
                 details.superseded = code === "SUPERSEDED";
             }
             else if (joining && result.membership) {
-                details.membership = { ...result.membership, model: model };
+                details.membership = { ...result.membership, model: model, short_id: result.short_id };
+                details.member_name = result.member_name;
                 details.joined = true;
                 details.lease = details.membership.lease;
                 details.checkpoint = result.cursor;

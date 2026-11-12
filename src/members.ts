@@ -1,24 +1,25 @@
 import { dutyInput, setDuty } from "./duties.ts";
-import { pendAssignments } from "./assignments.ts";
+import { bindSession, findSession, sessionName } from "./identity.ts";
 import type { Store, Task } from "./database.ts";
 import { canonical, digest, newId, object, requireValue, text, uuid } from "./protocol.ts";
 import type { Author, Cursor, Request } from "./protocol.ts";
 
-/** 名称决定房间内成员，provider/id 仅保存 Pi 的选中模型来源。 */
+/** Pi 当前选中模型的显示名与来源；模型变化不改变会话成员身份。 */
 export interface ModelIdentity { name: string; provider: string; id: string }
 
-/** 接替凭证只由持有会话保存，不出现在公开成员名单或作者信息中。 */
+/** 成员凭证只由持有会话保存，不出现在公开成员名单或作者信息中。 */
 export interface Membership { member_id: string; lease: string }
 
-/** 持久化成员保留历史加入记录；owner 为空不代表成员被删除。 */
+/** 持久化成员保留职责与历史；会话归属不随 lease 释放而删除。 */
 export interface Member {
   id: string; task_id: string; name: string; model: string; kind: "pi" | "external";
   owner_client: string | null; owner_session: string | null; lease: string | null;
   claimed_generation: string | null; joined_at: string; updated_at: string; urgent_enabled: number; duty: string; duty_revision: string | null;
+  session_id?: string; short_id?: string;
 }
 
-/** 加入结果的订阅起点在请求去重记录中固定，响应丢失不会跳过后来的消息。 */
-export interface Joined { membership: Membership; cursor: Cursor; duty_change?: unknown }
+/** 加入结果固定凭证与订阅起点，并返回当前会话的显示名称。 */
+export interface Joined { membership: Membership; cursor: Cursor; member_name: string; short_id: string; duty_change?: unknown }
 
 /** 原生 Pi 适配器注入模型信息；缺失时不生成临时昵称。 */
 export function selectedModel(request: Request): ModelIdentity {
@@ -39,10 +40,11 @@ export function membership(value: unknown): Membership | undefined {
 export function currentMember(store: Store, task: Task, request: Request): Member | undefined {
   const claim = membership(request.membership);
   if (!claim) return undefined;
+  const session = findSession(store.db, task.id, request.session_id);
   const member = store.one<Member>("SELECT * FROM members WHERE id=? AND task_id=?", claim.member_id, task.id);
-  if (!member || member.kind !== "pi" || member.owner_client !== request.client || member.owner_session !== request.session_id ||
+  if (!member || session?.member_id !== member.id || member.kind !== "pi" || member.owner_client !== request.client || member.owner_session !== request.session_id ||
     member.lease !== claim.lease || member.claimed_generation !== store.metadata().generation) return undefined;
-  if (request.model !== undefined && selectedModel(request).name !== member.name) return undefined;
+  member.short_id = session.short_id;
   return member;
 }
 
@@ -51,11 +53,11 @@ export function requireMember(store: Store, task: Task, request: Request): Membe
   selectedModel(request);
   requireValue(request.membership !== undefined, "JOIN_REQUIRED", "请先用 Pi collab open 加入房间");
   const member = currentMember(store, task, request);
-  requireValue(member, "SUPERSEDED", "成员凭证已被接替或选中模型已变化；可只读查询，明确重新加入才能继续写入");
+  requireValue(member, "SUPERSEDED", "会话的成员凭证已失效；可只读查询，明确重新加入才能继续写入");
   return member;
 }
 
-/** 明确加入才取得持有权；请求记录与成员变更在调用方同一个写事务内提交。 */
+/** 同一会话复用成员；有效凭证下切换模型保留 lease、职责和阅读位置。 */
 export function joinRoom(store: Store, task: Task, request: Request, cursor: Cursor): Joined {
   const model = selectedModel(request);
   const requestId = uuid(request.request_id, "request_id");
@@ -69,51 +71,52 @@ export function joinRoom(store: Store, task: Task, request: Request, cursor: Cur
   if (prior) {
     requireValue(prior.fingerprint === fingerprint, "REQUEST_CONFLICT", "加入 request_id 已用于不同操作");
     const result = JSON.parse(prior.result) as Joined;
-    requireValue(currentMember(store, task, { ...request, membership: result.membership }), "SUPERSEDED", "原加入请求的凭证已经失效，旧请求不能再次接替");
-    return result;
+    const member = currentMember(store, task, { ...request, membership: result.membership });
+    requireValue(member, "SUPERSEDED", "原加入请求的凭证已经失效，旧请求不能再次取得持有权");
+    return { ...result, member_name: member.name, short_id: member.short_id! };
   }
-  const before = store.one<Member>("SELECT * FROM members WHERE task_id=? AND name=?", task.id, model.name);
-  requireValue(!before || before.kind === "pi", "IDENTITY", "外部成员不能由 Pi 接替");
+  const session = findSession(store.db, task.id, request.session_id);
+  const before = session ? store.one<Member>("SELECT * FROM members WHERE id=? AND task_id=?", session.member_id, task.id) : undefined;
   const id = before?.id ?? newId();
-  const lease = newId();
+  const active = currentMember(store, task, request);
+  const lease = active?.id === id ? active.lease! : newId();
   const now = new Date().toISOString();
-  // 切换模型只释放本会话仍持有的旧槽位，不能解除其他会话后来取得的身份。
-  const previous = membership(request.membership);
-  if (previous && previous.member_id !== id) {
-    if (currentMember(store, task, { ...request, model: undefined })) pendAssignments(store, task, JSON.stringify({ client: request.client, session_id: request.session_id, model }), previous.member_id);
-    store.run("UPDATE members SET owner_client=NULL,owner_session=NULL,lease=NULL,claimed_generation=NULL,updated_at=? WHERE task_id=? AND id=? AND owner_client=? AND owner_session=? AND lease=?",
-      now, task.id, previous.member_id, request.client, request.session_id, previous.lease);
+  if (!before) {
+    // 占位名称仅在当前事务内存在；先建成员以满足会话归属的外键约束。
+    store.run("INSERT INTO members(id,task_id,name,model,joined_at,updated_at) VALUES(?,?,?,?,?,?)",
+      id, task.id, id, JSON.stringify(model), now, now);
   }
-  if (before) {
-    store.run("UPDATE members SET model=?,owner_client=?,owner_session=?,lease=?,claimed_generation=?,updated_at=? WHERE id=?",
-      JSON.stringify(model), request.client, request.session_id, lease, meta.generation, now, id);
-  } else {
-    store.run("INSERT INTO members(id,task_id,name,model,owner_client,owner_session,lease,claimed_generation,joined_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      id, task.id, model.name, JSON.stringify(model), request.client, request.session_id, lease, meta.generation, now, now);
-  }
+  const bound = bindSession(store.db, task.id, request.session_id, id);
+  const name = sessionName(model.name, bound.short_id);
+  store.run("UPDATE members SET name=?,model=?,owner_client=?,owner_session=?,lease=?,claimed_generation=?,updated_at=? WHERE id=?",
+    name, JSON.stringify(model), request.client, request.session_id, lease, meta.generation, now, id);
   const joinedMember = store.one<Member>("SELECT * FROM members WHERE id=?", id)!;
+  joinedMember.short_id = bound.short_id;
   const change = duty ? setDuty(store, task, joinedMember, duty, authorFor(request, joinedMember)) : undefined;
-  const result: Joined = { membership: { member_id: id, lease }, cursor, ...(change ? { duty_change: change.duty_change } : {}) };
+  const position = active?.id === id && request.after !== undefined ? { ...cursor, after: store.checkAnchor(task, request.after) } : cursor;
+  const result: Joined = { membership: { member_id: id, lease }, cursor: position, member_name: name, short_id: bound.short_id, ...(change ? { duty_change: change.duty_change } : {}) };
   store.run("INSERT INTO requests VALUES(?,?,?,?,?,?,?)", task.id, meta.generation, request.client, request.session_id, requestId, fingerprint, JSON.stringify(result));
   return result;
 }
 
-/** 作者保留原传输身份并附加当时选中模型；接替不会改写历史发言。 */
+/** 作者保存写入时的模型和会话显示名，之后切换模型不会改写历史发言。 */
 export function authorFor(request: Request, member: Member): string {
-  return JSON.stringify({ client: request.client, session_id: request.session_id, member_id: member.id, model: selectedModel(request) });
+  const model = selectedModel(request);
+  return JSON.stringify({ client: request.client, session_id: request.session_id, member_id: member.id, model,
+    name: sessionName(model.name, member.short_id ?? request.session_id.slice(0, 8)) });
 }
 
-/** 作者显示名取写入时保存的模型名，接替不改变历史显示。 */
+/** 旧作者记录按原会话补显示名，外部作者保留独立名称。 */
 export function publicAuthor(raw: string): Author {
   const author = JSON.parse(raw) as Author;
-  return { ...author, name: author.kind === "external" ? author.name : author.model?.name };
+  return { ...author, name: author.kind === "external" ? author.name : author.name ?? sessionName(author.model?.name ?? "未知模型", author.session_id.slice(0, 8)) };
 }
 
 /** 成员列表不代表在线人数；分页避免大量历史成员占满一次工具输出。 */
 export function roomInfo(store: Store, task: Task, request: Request): Record<string, unknown> {
   const after = request.members_after === undefined ? "" : uuid(request.members_after, "members_after");
-  const rows = store.all<Member>("SELECT * FROM members WHERE task_id=? AND id>? ORDER BY id LIMIT 21", task.id, after);
-  const members = rows.slice(0, 20).map(row => ({ id: row.id, name: row.name, model: JSON.parse(row.model), has_holder: row.lease !== null, duty: row.duty, duty_revision: row.duty_revision }));
+  const rows = store.all<Member>("SELECT m.*,s.session_id,s.short_id FROM members m LEFT JOIN member_sessions s ON s.member_id=m.id WHERE m.task_id=? AND m.id>? ORDER BY m.id LIMIT 21", task.id, after);
+  const members = rows.slice(0, 20).map(row => ({ id: row.id, name: row.name, session_id: row.session_id, short_id: row.short_id, model: JSON.parse(row.model), has_holder: row.lease !== null, duty: row.duty, duty_revision: row.duty_revision }));
   const total = store.one<{ total: number; first: number | null; last: number | null }>("SELECT count(*) AS total,min(chat_no) AS first,max(chat_no) AS last FROM messages WHERE task_id=?", task.id)!;
   const claim = membership(request.membership);
   const member = currentMember(store, task, request);

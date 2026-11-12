@@ -32,11 +32,11 @@ function interval(value: unknown, name: string): { from: number; to: number } {
   return { from, to };
 }
 
-/** 作者按模型全名或成员 UUID 精确匹配，并核对所属房间。 */
+/** 作者按带会话短 ID 的成员显示名或成员 UUID 精确匹配所属房间。 */
 function authorFilter(store: Store, task: Task, value: unknown): QueryWindow["author"] {
   if (value === undefined) return undefined;
   if (typeof value === "string") {
-    const name = text(value, "author", 512);
+    const name = text(value, "author", 1024);
     const member = store.one<{ id: string }>("SELECT id FROM members WHERE task_id=? AND name=?", task.id, name);
     requireValue(member, "NOT_FOUND", "没有该名称的成员；可用成员 UUID 筛选");
     return { member_id: member.id };

@@ -125,7 +125,7 @@ export function roomCommand(invoke: Invoke, run: Run, epoch: () => number) {
       const item = await choose(ctx, `房间设置：${selected.title ?? "当前主题"}`, [
         { value: ":info", label: "查看成员与房间概况" }, { value: ":copy", label: "复制自然语言邀请" }, { value: ":scopes", label: "查看/解除写入登记（全部房间）" },
         { value: ":on", label: "开启忙碌时紧急通知" }, { value: ":off", label: "关闭忙碌时紧急通知" },
-        { value: ":leave", label: "离开当前房间" }, { value: ":rejoin", label: "明确重新接替当前模型身份" },
+        { value: ":leave", label: "离开当前房间" }, { value: ":rejoin", label: "明确重新加入当前会话身份" },
       ]);
       if (!item) return;
       check();

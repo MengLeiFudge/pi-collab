@@ -9,8 +9,8 @@ import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { commands, newId, requireValue } from "./protocol.ts";
-import { branchState, registerReceiver } from "./receiver.ts";
+import { canonical, commands, newId, requireValue } from "./protocol.ts";
+import { branchState, piModel, registerReceiver } from "./receiver.ts";
 import { createAdapter } from "./adapter.ts";
 import type { AdapterRequest, AdapterResult } from "./adapter.ts";
 
@@ -63,8 +63,8 @@ export default function collabExtension(pi: ExtensionAPI): void {
     epoch++; receiver.invalidate();
     const state = branchState(ctx);
     const member = state.selected && state.memberships.get(state.selected.task_id);
-    if (event.source !== "restore" && state.selected && member && member.model.name !== ctx.model?.name) {
-      await runCommand({ command: "open", input: { task_id: state.selected.task_id, rejoin: true } }, ctx);
+    if (event.source !== "restore" && state.selected && member && !state.superseded.has(state.selected.task_id) && !state.blocked.has(state.selected.task_id) && canonical(member.model) !== canonical(piModel(ctx))) {
+      await runCommand({ command: "open", input: { task_id: state.selected.task_id } }, ctx);
     } else await receiver.refresh(ctx);
   });
   pi.registerTool({

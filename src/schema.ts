@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { newId, requireValue } from "./protocol.ts";
+import { bindSession, sessionName } from "./identity.ts";
 
 /** 群聊持久化版本；业务连接与备份恢复只接受此版本。 */
-export const schemaVersion = 2;
+export const schemaVersion = 3;
 
 /** 空库一次性建立完整结构，房间与首版合同在业务事务中创建。 */
 const initialSchema = `
@@ -127,10 +128,10 @@ export function createSchema(db: DatabaseSync): void {
   upgradeSchema(db);
 }
 
-/** 为新库及公开 schema 1 升级追加桥接结构；调用者负责门禁和备份。 */
-export function upgradeSchema(db: DatabaseSync): void {
+/** 逐版升级结构并刷新全部写入协议；调用者负责门禁和备份。 */
+export function upgradeSchema(db: DatabaseSync, fromVersion = 1): void {
   requireValue(db.isTransaction, "SCHEMA", "升级必须在写事务内执行");
-  db.exec(`
+  if (fromVersion < 2) db.exec(`
     ALTER TABLE members ADD COLUMN kind TEXT NOT NULL DEFAULT 'pi' CHECK(kind IN ('pi','external'));
     CREATE TABLE bridge_batches (
       id TEXT PRIMARY KEY, bridge_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -166,6 +167,27 @@ export function upgradeSchema(db: DatabaseSync): void {
     CREATE INDEX bridge_raw_expiry ON bridge_sources(received_at) WHERE body IS NOT NULL;
     CREATE INDEX bridge_pending ON bridge_outbox(bridge_id,generation,acked,seq);
   `);
+  if (fromVersion < 3) {
+    db.exec(`
+      CREATE TABLE member_sessions (
+        task_id TEXT NOT NULL REFERENCES tasks(id), session_id TEXT NOT NULL,
+        member_id TEXT NOT NULL UNIQUE REFERENCES members(id), short_id TEXT NOT NULL,
+        PRIMARY KEY(task_id,session_id), UNIQUE(task_id,short_id)
+      ) STRICT;
+    `);
+    // 旧模型槽位只为当前持有者建立归属；已离开的历史成员不推断属于哪个会话。
+    const members = db.prepare("SELECT id,task_id,owner_session,model FROM members WHERE kind='pi' AND owner_session IS NOT NULL ORDER BY updated_at DESC,id").all() as { id: string; task_id: string; owner_session: string; model: string }[];
+    for (const member of members) {
+      const existing = db.prepare("SELECT 1 FROM member_sessions WHERE task_id=? AND session_id=?").get(member.task_id, member.owner_session);
+      if (existing) {
+        db.prepare("UPDATE members SET owner_client=NULL,owner_session=NULL,lease=NULL,claimed_generation=NULL WHERE id=?").run(member.id);
+        continue;
+      }
+      const session = bindSession(db, member.task_id, member.owner_session, member.id);
+      const model = JSON.parse(member.model) as { name: string };
+      db.prepare("UPDATE members SET name=? WHERE id=?").run(sessionName(model.name, session.short_id), member.id);
+    }
+  }
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[];
   for (const { name: table } of tables) {
     for (const operation of ["INSERT", "UPDATE", "DELETE"]) {

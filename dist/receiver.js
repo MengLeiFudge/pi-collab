@@ -2,6 +2,7 @@ import { existsSync, watch } from "node:fs";
 import { canonical, inboxText, newId } from "./protocol.js";
 import { receivedSummary } from "./rendering.js";
 import { changeSignal, dataDirectory } from "./signals.js";
+import { sessionName } from "./identity.js";
 /** 原生分支条目是交付证据；新进度不会被迟到的旧批次回退。 */
 export function branchState(ctx, pending) {
     const state = { checkpoints: new Map(), resets: new Map(), blocked: new Set(), memberships: new Map(), superseded: new Set(), viewed: new Map(), deliveredBatches: new Set(), stats: new Map() };
@@ -89,14 +90,17 @@ export function branchState(ctx, pending) {
     }
     return state;
 }
-/** 模型名来自 Pi 当前选中项，虚拟路由后的物理模型不改变成员身份。 */
+/** 模型信息来自 Pi 当前选中项，只用于来源与显示。 */
 export function piModel(ctx) {
     return ctx.model?.name ? { name: ctx.model.name, provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
 /** 状态栏保留完整名称；新消息数沿用未读水位线，异常状态替代计数段。 */
 export function roomStatus(ctx, selected, note = "", stats) {
-    stats ??= branchState(ctx).stats.get(selected.task_id);
-    const parts = ["collab", stats?.title ?? selected.title ?? "Room", ctx.model?.name ?? "Model unavailable"];
+    const state = branchState(ctx);
+    stats ??= state.stats.get(selected.task_id);
+    const member = state.memberships.get(selected.task_id);
+    const actor = ctx.model?.name ? sessionName(ctx.model.name, member?.short_id ?? ctx.sessionManager.getSessionId().slice(0, 8)) : "Model unavailable";
+    const parts = ["collab", stats?.title ?? selected.title ?? "Room", actor];
     if (note)
         parts.push(note);
     else if (stats)
@@ -166,7 +170,7 @@ export function registerReceiver(pi, invoke) {
         const state = branchState(ctx, pendingTool);
         const selected = state.selected;
         const member = selected ? state.memberships.get(selected.task_id) : undefined;
-        const key = selected ? JSON.stringify([ctx.sessionManager.getSessionId(), selected.database_id, selected.task_id, member?.lease, ctx.model?.name]) : undefined;
+        const key = selected ? JSON.stringify([ctx.sessionManager.getSessionId(), selected.database_id, selected.task_id, member?.lease, piModel(ctx)]) : undefined;
         if (key !== binding) {
             release();
             binding = key;
@@ -176,7 +180,7 @@ export function registerReceiver(pi, invoke) {
                 ctx.ui.setStatus("collab", undefined);
             return;
         }
-        if (!member || state.superseded.has(selected.task_id) || ctx.model?.name !== member.model.name) {
+        if (!member || state.superseded.has(selected.task_id) || !piModel(ctx)) {
             release();
             roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "Superseded (read-only)" : "Not joined", state.stats.get(selected.task_id));
             return;
@@ -272,8 +276,9 @@ export function registerReceiver(pi, invoke) {
             return;
         }
         deferred = 0;
+        const actor = sessionName(ctx.model.name, member.short_id ?? sessionId.slice(0, 8));
         const details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next,
-            stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name) };
+            stats: batch.display_stats, model_name: ctx.model.name, member_name: actor, display_summary: receivedSummary(batch, actor) };
         if (!batch.total_events) {
             if (canonical(checkpoint) !== canonical(batch.next) || canonical(state.stats.get(selected.task_id)) !== canonical(batch.display_stats))
                 pi.appendEntry("collab.cursor", details);
@@ -369,7 +374,7 @@ export function registerReceiver(pi, invoke) {
         const state = branchState(ctx);
         const selected = state.selected;
         const member = selected && state.memberships.get(selected.task_id);
-        if (!selected || !member || state.blocked.has(selected.task_id) || state.superseded.has(selected.task_id) || member.model.name !== ctx.model?.name)
+        if (!selected || !member || state.blocked.has(selected.task_id) || state.superseded.has(selected.task_id) || !piModel(ctx))
             return;
         const sessionId = ctx.sessionManager.getSessionId();
         const basis = state.resets.get(selected.task_id) ?? "";
@@ -407,8 +412,9 @@ export function registerReceiver(pi, invoke) {
             if (!batch.total_events)
                 return;
             dirty ||= batch.omitted_events > 0;
+            const actor = sessionName(ctx.model.name, member.short_id ?? sessionId.slice(0, 8));
             const details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis,
-                delivery_id: newId(), stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name),
+                delivery_id: newId(), stats: batch.display_stats, model_name: ctx.model.name, member_name: actor, display_summary: receivedSummary(batch, actor),
                 viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
             const entry = { type: "custom_message", customType: "collab.batch", content: inboxText(batch), details, display: true };
             return { entries: [...event.entries, entry], continue: true };

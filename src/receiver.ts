@@ -6,12 +6,13 @@ import type { Cursor, InboxResult, MessageStats } from "./protocol.ts";
 import { receivedSummary } from "./rendering.ts";
 import { changeSignal, dataDirectory } from "./signals.ts";
 import type { Membership, ModelIdentity } from "./members.ts";
+import { sessionName } from "./identity.ts";
 
 /** 用户选择的任务，收到的协作内容不能改变这个选择。 */
 export interface Selection { database_id: string; generation: string; task_id: string; title?: string }
 
 /** 分支内的成员持有信息；恢复只能核对这个凭证，不能自动重新取得身份。 */
-export interface MemberBinding extends Membership { model: ModelIdentity }
+export interface MemberBinding extends Membership { model: ModelIdentity; short_id?: string }
 
 /** 自由查询确实返回过的消息，只用来抑制同一分支的重复投递。 */
 export interface ViewedMessage { id: string; event_seq: number }
@@ -37,6 +38,7 @@ export interface Details {
   result?: Record<string, unknown>;
   stats?: MessageStats;
   model_name?: string;
+  member_name?: string;
   command?: string;
   display_summary?: string;
 }
@@ -125,15 +127,18 @@ export function branchState(ctx: ExtensionContext, pending?: PendingTool): Branc
   return state;
 }
 
-/** 模型名来自 Pi 当前选中项，虚拟路由后的物理模型不改变成员身份。 */
+/** 模型信息来自 Pi 当前选中项，只用于来源与显示。 */
 export function piModel(ctx: ExtensionContext): ModelIdentity | undefined {
   return ctx.model?.name ? { name: ctx.model.name, provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
 
 /** 状态栏保留完整名称；新消息数沿用未读水位线，异常状态替代计数段。 */
 export function roomStatus(ctx: ExtensionContext, selected: Selection, note = "", stats?: MessageStats): void {
-  stats ??= branchState(ctx).stats.get(selected.task_id);
-  const parts = ["collab", stats?.title ?? selected.title ?? "Room", ctx.model?.name ?? "Model unavailable"];
+  const state = branchState(ctx);
+  stats ??= state.stats.get(selected.task_id);
+  const member = state.memberships.get(selected.task_id);
+  const actor = ctx.model?.name ? sessionName(ctx.model.name, member?.short_id ?? ctx.sessionManager.getSessionId().slice(0, 8)) : "Model unavailable";
+  const parts = ["collab", stats?.title ?? selected.title ?? "Room", actor];
   if (note) parts.push(note);
   else if (stats) parts.push(`${stats.unread} new message${stats.unread === 1 ? "" : "s"}`);
   if (ctx.hasUI) ctx.ui.setStatus("collab", parts.join(" · "));
@@ -199,10 +204,10 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
     const state = branchState(ctx, pendingTool);
     const selected = state.selected;
     const member = selected ? state.memberships.get(selected.task_id) : undefined;
-    const key = selected ? JSON.stringify([ctx.sessionManager.getSessionId(), selected.database_id, selected.task_id, member?.lease, ctx.model?.name]) : undefined;
+    const key = selected ? JSON.stringify([ctx.sessionManager.getSessionId(), selected.database_id, selected.task_id, member?.lease, piModel(ctx)]) : undefined;
     if (key !== binding) { release(); binding = key; }
     if (!selected) { if (ctx.hasUI) ctx.ui.setStatus("collab", undefined); return; }
-    if (!member || state.superseded.has(selected.task_id) || ctx.model?.name !== member.model.name) {
+    if (!member || state.superseded.has(selected.task_id) || !piModel(ctx)) {
       release();
       roomStatus(ctx, selected, state.superseded.has(selected.task_id) ? "Superseded (read-only)" : "Not joined", state.stats.get(selected.task_id));
       return;
@@ -268,8 +273,9 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       deferred = batch.wait_ms; dirty = true; return;
     }
     deferred = 0;
+    const actor = sessionName(ctx.model!.name, member.short_id ?? sessionId.slice(0, 8));
     const details: Details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, delivery_basis: basis, lease: member.lease, checkpoint: batch.next,
-      stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name) };
+      stats: batch.display_stats, model_name: ctx.model!.name, member_name: actor, display_summary: receivedSummary(batch, actor) };
     if (!batch.total_events) {
       if (canonical(checkpoint) !== canonical(batch.next) || canonical(state.stats.get(selected.task_id)) !== canonical(batch.display_stats)) pi.appendEntry("collab.cursor", details);
       roomStatus(ctx, selected, "", batch.display_stats);
@@ -329,7 +335,7 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
     const state = branchState(ctx);
     const selected = state.selected;
     const member = selected && state.memberships.get(selected.task_id);
-    if (!selected || !member || state.blocked.has(selected.task_id) || state.superseded.has(selected.task_id) || member.model.name !== ctx.model?.name) return;
+    if (!selected || !member || state.blocked.has(selected.task_id) || state.superseded.has(selected.task_id) || !piModel(ctx)) return;
     const sessionId = ctx.sessionManager.getSessionId();
     const basis = state.resets.get(selected.task_id) ?? "";
     const operation = new AbortController();
@@ -359,8 +365,9 @@ export function registerReceiver(pi: ExtensionAPI, invoke: Invoke): ReceiverCont
       roomStatus(ctx, selected, "", batch.display_stats);
       if (!batch.total_events) return;
       dirty ||= batch.omitted_events > 0;
+      const actor = sessionName(ctx.model!.name, member.short_id ?? sessionId.slice(0, 8));
       const details: Details = { collab_version: 2, session_id: sessionId, task_id: selected.task_id, lease: member.lease, delivery_basis: basis,
-        delivery_id: newId(), stats: batch.display_stats, model_name: member.model.name, display_summary: receivedSummary(batch, member.model.name),
+        delivery_id: newId(), stats: batch.display_stats, model_name: ctx.model!.name, member_name: actor, display_summary: receivedSummary(batch, actor),
         viewed: batch.messages.filter(item => item.kind === "posted").map(item => ({ id: item.object_id, event_seq: item.seq })) };
       const entry: CustomMessageEntryDraft = { type: "custom_message", customType: "collab.batch", content: inboxText(batch), details, display: true };
       return { entries: [...event.entries, entry], continue: true };

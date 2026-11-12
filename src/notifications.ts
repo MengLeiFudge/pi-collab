@@ -2,16 +2,16 @@ import type { Store, Task } from "./database.ts";
 import type { Request } from "./protocol.ts";
 import { choice, requireValue, text } from "./protocol.ts";
 
-/** 通知目标保留成员 UUID；名称用于输入，接替不改变目标身份。 */
+/** 通知目标保存成员 UUID；输入使用带会话短 ID 的成员显示名。 */
 export function notificationFields(store: Store, task: Task, request: Request): { priority: string; reason: string; audience: string; notification: unknown } {
   const priority = choice(request.priority ?? "normal", "priority", ["normal", "urgent"]);
   const reason = priority === "urgent" ? text(request.reason, "reason", 1024) : request.reason === undefined ? "" : text(request.reason, "reason", 1024);
   const target = request.notify ?? "all";
   let ids: string[] | undefined;
   if (target !== "all") {
-    requireValue(Array.isArray(target) && target.length > 0 && target.length <= 20, "INPUT", "notify 需要 all 或至多二十个模型名称");
+    requireValue(Array.isArray(target) && target.length > 0 && target.length <= 20, "INPUT", "notify 需要 all 或至多二十个成员显示名（模型名 + 会话短 ID）");
     ids = [...new Set(target.map(value => {
-      const name = text(value, "notify.name", 512);
+      const name = text(value, "notify.name", 1024);
       const member = store.one<{ id: string }>("SELECT id FROM members WHERE task_id=? AND name=?", task.id, name);
       requireValue(member, "NOT_FOUND", `通知对象尚未加入：${name}`);
       return member.id;

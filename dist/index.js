@@ -7,8 +7,8 @@ import { roomCommand } from "./menu.js";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { commands, newId, requireValue } from "./protocol.js";
-import { branchState, registerReceiver } from "./receiver.js";
+import { canonical, commands, newId, requireValue } from "./protocol.js";
+import { branchState, piModel, registerReceiver } from "./receiver.js";
 import { createAdapter } from "./adapter.js";
 /** 工具和自动接收共用本机 CLI；模型始终是用户已打开的当前 Pi 会话。 */
 export default function collabExtension(pi) {
@@ -64,8 +64,8 @@ export default function collabExtension(pi) {
         receiver.invalidate();
         const state = branchState(ctx);
         const member = state.selected && state.memberships.get(state.selected.task_id);
-        if (event.source !== "restore" && state.selected && member && member.model.name !== ctx.model?.name) {
-            await runCommand({ command: "open", input: { task_id: state.selected.task_id, rejoin: true } }, ctx);
+        if (event.source !== "restore" && state.selected && member && !state.superseded.has(state.selected.task_id) && !state.blocked.has(state.selected.task_id) && canonical(member.model) !== canonical(piModel(ctx))) {
+            await runCommand({ command: "open", input: { task_id: state.selected.task_id } }, ctx);
         }
         else
             await receiver.refresh(ctx);

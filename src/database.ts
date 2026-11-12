@@ -97,7 +97,7 @@ export class Store {
   /** 每个事务入口确认库结构与本程序一致，未知版本直接拒绝。 */
   checkSchema(): void {
     const version = this.one<{ user_version: number }>("PRAGMA user_version")!.user_version;
-    requireValue(version === schemaVersion, "SCHEMA", `不支持 schema ${version}，程序仅支持 ${schemaVersion}`);
+    requireValue(version === schemaVersion, "SCHEMA", `不支持 schema ${version}，程序仅支持 ${schemaVersion}；旧库请协调停写后执行 maintain migrate，见 docs/migration.md`);
   }
 
   /** 关闭本命令的连接，不影响其他客户端。 */

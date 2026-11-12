@@ -82,14 +82,14 @@ function openedTask(store: Store, task: Task, request: Request): Record<string, 
   const recent = { view: "preview", messages, read: { task_id: task.id, latest: 10 } };
   const progress = progressAt(store, task);
   const result = { ...identity(store, task), authority: "collab", task: summary(revision(store, task), progress),
-    cursor: joined?.cursor ?? cursor, ...(joined ? { membership: joined.membership, duty_change: joined.duty_change } : {}), room, recent, counts: counts(store, task, cursor.after, effective),
+    cursor: joined?.cursor ?? cursor, ...(joined ? { membership: joined.membership, member_name: joined.member_name, short_id: joined.short_id, duty_change: joined.duty_change } : {}), room, recent, counts: counts(store, task, joined?.cursor.after ?? cursor.after, effective),
     progress: progressView(progress), contract: { task_id: task.id, object_id: task.current_revision }, issues: { task_id: task.id, view: "index", after: { seq: 0, event_id: null } } };
   const members = room.members as { id: string }[];
   while (Buffer.byteLength(JSON.stringify({ ok: true, ...result })) > 12 * 1024 && members.length > 1) {
     members.pop(); room.members_after = members.at(-1)!.id;
   }
   requireValue(Buffer.byteLength(JSON.stringify({ ok: true, ...result })) <= 12 * 1024, "OUTPUT_BUDGET", "房间概况超过预算，请按对象展开合同或消息");
-  const displayAfter = joined ? cursor.after : store.checkAnchor(task, request.after ?? cursor.after);
+  const displayAfter = joined ? joined.cursor.after : store.checkAnchor(task, request.after ?? cursor.after);
   return { ...result, display_stats: messageStats(store, task, displayAfter.seq) };
 }
 

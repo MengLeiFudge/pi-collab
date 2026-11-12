@@ -1,6 +1,7 @@
 import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { excerpt } from "./protocol.js";
+import { sessionName } from "./identity.js";
 /** 摘要压成一行；完整正文仅由展开态显示，不改模型输入。 */
 function brief(value) {
     return excerpt(value.replace(/\s+/g, " ").trim(), 100);
@@ -22,7 +23,7 @@ function resultSummary(details, body, input) {
         return saved ? receivedCounts(saved[1], Number(saved[2]), Number(saved[3] ?? 0), Number(saved[4] ?? 0)) : details.display_summary;
     }
     const result = details?.result;
-    const actor = details?.model_name ?? details?.membership?.model.name ?? "Current session";
+    const actor = details?.member_name ?? (details ? sessionName(details.model_name ?? details.membership?.model.name ?? "Current session", details.membership?.short_id ?? details.session_id.slice(0, 8)) : "Current session");
     if (result?.ok === false)
         return `${actor} collaboration failed: ${brief(String(result.error?.message ?? body))}`;
     if (result?.view === "content" && Array.isArray(result.messages))
