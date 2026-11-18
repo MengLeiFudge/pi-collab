@@ -47,7 +47,7 @@ export interface InboxMessage {
   show: { object_id: string; compare_to?: string };
 }
 
-/** 状态栏计数来自同一查询快照；unread 只按 after 水位计算，不受逐条查看影响。 */
+/** 状态栏计数来自同一查询快照；unread 统计 after 水位之后其他会话的帖子，不受逐条查看影响。 */
 export interface MessageStats { total: number; unread: number; after: number; upper: number; title: string }
 
 /** 主动读取和空闲投递共用的固定上界批次。 */

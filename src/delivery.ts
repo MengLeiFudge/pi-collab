@@ -38,10 +38,12 @@ export function inboxFilter(store: Store, task: Task, request: Request, after: n
   return { sql, values };
 }
 
-/** 统计房间消息而非系统事件；历史翻阅和紧急跳读不改变水位线计数。 */
-export function messageStats(store: Store, task: Task, after: number): MessageStats {
+/** 未读数只统计其他会话的帖子；历史翻阅和紧急跳读不改变水位线计数。 */
+export function messageStats(store: Store, task: Task, request: Request, after: number): MessageStats {
+  const filter = inboxFilter(store, task, { ...request, delivered: undefined }, after, task.event_seq);
   const row = store.one<{ total: number; unread: number; title: string }>(
-    "SELECT count(*) AS total,coalesce(sum(event_seq>?),0) AS unread,(SELECT title FROM revisions WHERE id=?) AS title FROM messages WHERE task_id=?", after, task.current_revision, task.id)!;
+    `SELECT count(*) AS total,(SELECT count(*) FROM events WHERE kind='posted' AND ${filter.sql}) AS unread,(SELECT title FROM revisions WHERE id=?) AS title FROM messages WHERE task_id=?`,
+    ...filter.values, task.current_revision, task.id)!;
   return { ...row, after, upper: task.event_seq };
 }
 
@@ -81,7 +83,7 @@ export function readInbox(store: Store, task: Task, request: Request, window: Wi
     urgent_only: urgentOnly, wait_ms: wait,
     history: { after, window, view: "index" },
   };
-  result.display_stats = messageStats(store, task, result.next.after.seq);
+  result.display_stats = messageStats(store, task, request, result.next.after.seq);
   const budget = integer(request.max_bytes, "max_bytes", 12 * 1024, 64 * 1024);
   requireValue(budget >= 4096, "INPUT", "max_bytes 至少为 4096");
   // 显示元数据不占模型正文预算，保持已有批次的正文截断边界。

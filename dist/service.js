@@ -69,7 +69,7 @@ function openedTask(store, task, request) {
     }
     requireValue(Buffer.byteLength(JSON.stringify({ ok: true, ...result })) <= 12 * 1024, "OUTPUT_BUDGET", "房间概况超过预算，请按对象展开合同或消息");
     const displayAfter = joined ? joined.cursor.after : store.checkAnchor(task, request.after ?? cursor.after);
-    return { ...result, display_stats: messageStats(store, task, displayAfter.seq) };
+    return { ...result, display_stats: messageStats(store, task, effective, displayAfter.seq) };
 }
 /** 固定上界及文档版本按数据库快照验证，客户端不能任意拼接分页视图。 */
 function readWindow(store, task, request, after) {
