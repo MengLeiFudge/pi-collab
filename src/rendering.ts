@@ -1,4 +1,4 @@
-import type { ExtensionAPI, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, KeybindingHints, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Box, MouseRegion, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 import type { Details } from "./receiver.ts";
@@ -41,15 +41,12 @@ function resultSummary(details: Details | undefined, body: string, input?: Recor
   return brief(body.split("\n", 1)[0] || "Collaboration message");
 }
 
-/** 宿主注入的键位文本，Pi 1.5 起由渲染选项提供；仓库编译基线 1.0.4 的类型里还没有。 */
-type HintSource = { keyText?: (keybinding: "app.tools.expand") => string };
-
 /**
  * 折叠提示的键位文本只能问宿主：扩展自己 import 的 keyText/keyHint 看到的是另一份
  * 从未初始化的键位表，渲染出来是空字符串（Pi 发布的是 bundle，与扩展加载的包不是一个实例）。
  */
-function expandHint(hints: HintSource, theme: Theme): string {
-  const key = hints.keyText?.("app.tools.expand") ?? "";
+function expandHint(hints: KeybindingHints, theme: Theme): string {
+  const key = hints.keyText("app.tools.expand");
   if (!key) return theme.fg("muted", "expand (no shortcut bound)");
   // 键名用强调色：默认的 dim 在深色消息底色上看不见。
   return `${theme.fg("accent", key)} ${theme.fg("muted", "to expand")}`;
@@ -64,7 +61,7 @@ class FoldedText implements Component {
     body: string,
     private readonly expanded: () => boolean,
     private readonly theme: Theme,
-    private readonly hints: HintSource,
+    private readonly hints: KeybindingHints,
   ) {
     this.text = new Text(body, 0, 0);
   }
@@ -95,7 +92,7 @@ export const toolRenderers: ToolRenderers = {
   renderResult(result, options, theme, context) {
     const body = result.content.filter(item => item.type === "text").map(item => item.text).join("\n");
     const summary = options.isPartial ? "Collaboration in progress" : resultSummary(result.details as Details | undefined, body, (context.args as { input?: Record<string, unknown> } | undefined)?.input);
-    return new FoldedText(summary, body, () => options.expanded, theme, context as HintSource);
+    return new FoldedText(summary, body, () => options.expanded, theme, context);
   },
 };
 
@@ -111,7 +108,7 @@ export function registerRendering(pi: ExtensionAPI): void {
       }
       const body = typeof message.content === "string" ? message.content : message.content.filter(item => item.type === "text").map(item => item.text).join("\n");
       const summary = type === "collab.error" ? "Collab delivery paused" : resultSummary(message.details, body);
-      const text = new FoldedText(summary, body, () => state.expanded, theme, options as HintSource);
+      const text = new FoldedText(summary, body, () => state.expanded, theme, options);
       // 自定义消息绕过 Pi 默认容器，需要自行提供背景与内边距；工具结果仍由宿主包裹。
       const box = new Box(1, 1, line => theme.bg("customMessageBg", line));
       box.addChild(text);

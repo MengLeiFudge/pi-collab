@@ -92,6 +92,7 @@ export default function collabExtension(pi) {
             reset: Type.Optional(Type.Boolean({ description: "仅 read：已核对恢复状态，重置统一阅读位置。" })),
         }),
         async execute(callId, params, signal, _onUpdate, ctx) {
+            // 参数已由 typebox schema 校验；1.5.2 的类型推导把 command 收窄成了 unknown。
             return run(callId, params, ctx, signal);
         },
     });

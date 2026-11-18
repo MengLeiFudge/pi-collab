@@ -41,7 +41,7 @@ function resultSummary(details, body, input) {
  * 从未初始化的键位表，渲染出来是空字符串（Pi 发布的是 bundle，与扩展加载的包不是一个实例）。
  */
 function expandHint(hints, theme) {
-    const key = hints.keyText?.("app.tools.expand") ?? "";
+    const key = hints.keyText("app.tools.expand");
     if (!key)
         return theme.fg("muted", "expand (no shortcut bound)");
     // 键名用强调色：默认的 dim 在深色消息底色上看不见。
