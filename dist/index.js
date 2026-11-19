@@ -4,16 +4,22 @@ import { ProcessRunner, nodeExecutable } from "./processes.js";
 import { agentDirectory } from "./signals.js";
 import { fileURLToPath } from "node:url";
 import { roomCommand } from "./menu.js";
-import { VERSION } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { canonical, commands, newId, requireValue } from "./protocol.js";
 import { branchState, piModel, registerReceiver } from "./receiver.js";
 import { createAdapter } from "./adapter.js";
+/**
+ * 与 pi-ai 的 StringEnum 等价：只产出 { type: "string", enum }。
+ * 从 pi-ai / pi-coding-agent 里 import 任何运行期值，都会把整个 Pi 库再加载一遍，
+ * 启动时间从 1 秒变成 12 秒，所以这里自己写一个。
+ */
+function stringEnum(values) {
+    return Type.Unsafe({ type: "string", enum: [...values] });
+}
 /** 工具和自动接收共用本机 CLI；模型始终是用户已打开的当前 Pi 会话。 */
 export default function collabExtension(pi) {
-    const version = /^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(VERSION);
-    requireValue(version && (+version[1] > 1 || +version[1] === 1 && (+version[2] > 0 || +version[3] >= 4)), "HOST_VERSION", "pi-collab 需要 Pi 1.0.4 或更新版本的协作生命周期 API");
+    // 取代原先读 Pi 的 VERSION：只看真正用到的宿主 API 在不在。
+    requireValue(typeof pi.registerMessageRenderer === "function" && typeof pi.registerTool === "function" && typeof pi.on === "function", "HOST_VERSION", "pi-collab 需要 Pi 1.0.4 或更新版本的协作生命周期 API");
     const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
     const runner = new ProcessRunner();
     /** SQLite 工作离开主线程；数据根不随子进程的项目目录变化。 */
@@ -87,7 +93,7 @@ export default function collabExtension(pi) {
         executionMode: "sequential",
         annotations: { destructiveHint: false, openWorldHint: false },
         parameters: Type.Object({
-            command: StringEnum(commands),
+            command: stringEnum(commands),
             input: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "命令业务字段；身份由 Pi 注入。" })),
             reset: Type.Optional(Type.Boolean({ description: "仅 read：已核对恢复状态，重置统一阅读位置。" })),
         }),

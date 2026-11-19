@@ -1,10 +1,19 @@
-import { copyToClipboard, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Input, Key, matchesKey, SelectList, Text } from "@earendil-works/pi-tui";
 import { branchState } from "./receiver.js";
 import { requireValue, uuid } from "./protocol.js";
+/**
+ * 用到时才加载 Pi 的运行期值：模块期 import 会把整个 Pi 库再拉一遍，
+ * 每个 Pi 窗口启动都要多花十几秒。
+ */
+let piRuntime;
+async function piHelpers() {
+    piRuntime ??= await import("@earendil-works/pi-coding-agent");
+    return piRuntime;
+}
 /** 使用 Pi 的输入和列表组件，保留主题、宽字符、取消与 IME 焦点行为。 */
 async function choose(ctx, title, items) {
     requireValue(ctx.mode === "tui", "UI_REQUIRED", "主题有歧义或需要菜单；请在交互 Pi 选择，或用 /collab join <UUID> 明确加入", { candidates: items });
+    const { getSelectListTheme } = await piHelpers();
     return ctx.ui.custom((tui, theme, keys, done) => {
         const input = new Input({ prompt: "搜索：", placeholder: "主题 / 项目 / 模型；Esc 取消" });
         const heading = new Text(theme.fg("accent", title), 0, 0);
@@ -97,6 +106,7 @@ export function roomCommand(invoke, run, epoch) {
             check();
             const value = result.details.result;
             requireValue(!result.isError && typeof value?.invitation === "string", "INVITE", "邀请生成失败");
+            const { copyToClipboard } = await piHelpers();
             await copyToClipboard(value.invitation);
             ctx.ui.notify("已复制自然语言邀请，可粘贴给新会话并补充分工", "info");
         };
